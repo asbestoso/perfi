@@ -1,0 +1,83 @@
+import { useState } from "react";
+import { api } from "../main";
+import { btnCls, Card, dollars, Error, inputCls, Page, useGet } from "./_shared";
+
+const TYPES = ["checking", "savings", "credit", "brokerage", "loan", "other"];
+
+function AddAccount({ onDone }: any) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState("checking");
+  const [balance, setBalance] = useState("0");
+  const [msg, setMsg] = useState("");
+  async function submit(e: any) {
+    e.preventDefault();
+    if (!name.trim()) { setMsg("Name is required."); return; }
+    try {
+      await api("/api/accounts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(), type,
+          balance_cents: Math.round(Number(balance || 0) * 100),
+        }),
+      });
+      setName(""); setBalance("0"); setMsg("");
+      onDone();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
+      <label className="text-sm">Name
+        <input value={name} onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. Schwab Brokerage" className={`${inputCls} ml-1 w-52`} />
+      </label>
+      <label className="text-sm">Type
+        <select value={type} onChange={(e) => setType(e.target.value)} className={`${inputCls} ml-1`}>
+          {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </label>
+      <label className="text-sm">Balance $
+        <input value={balance} onChange={(e) => setBalance(e.target.value)} inputMode="decimal"
+          className={`${inputCls} ml-1 w-28`} />
+      </label>
+      <button className={btnCls}>Add account</button>
+      {msg && <span className="text-sm text-slate-600">{msg}</span>}
+    </form>
+  );
+}
+
+export default function Accounts() {
+  const [tick, setTick] = useState(0);
+  const data = useGet(`/api/accounts?limit=500&tick=${tick}`);
+  const items = data?.items || [];
+  const total = items.reduce((s: number, a: any) => s + Number(a.balance_cents || 0), 0);
+  return (
+    <Page title="Accounts">
+      <Card title="Add account">
+        <AddAccount onDone={() => setTick((t) => t + 1)} />
+      </Card>
+      <Card title={`All accounts (${items.length}) · total ${dollars(total)}`}>
+        <Error data={data} />
+        {items.length === 0 ? (
+          <p className="text-sm text-slate-500">No accounts yet — add one above or import a CSV.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs uppercase text-slate-500">
+                <th className="py-1">Name</th><th>Type</th><th className="text-right">Balance</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {items.map((a: any) => (
+                <tr key={a.id}>
+                  <td className="py-1">{a.name}</td>
+                  <td className="text-slate-500">{a.type}</td>
+                  <td className="text-right">{dollars(a.balance_cents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+    </Page>
+  );
+}

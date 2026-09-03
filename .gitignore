@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+data/*.db*
+data/.ai_key
+backend/data/
+node_modules/
+frontend/dist/
+frontend/node_modules/
+.env
+.DS_Store
+.pytest_cache/
+*.egg-info/
+worklog.md
