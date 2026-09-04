@@ -29,11 +29,16 @@ CSV/OFX uploads never write transactions directly. They create an
 queue on the Import page, and merging (`services/reconcile.py`) inserts
 `Transaction`s.
 
-- **Dedupe key** (shared helper in `csv_import.py`): account + date + amount +
-  normalized merchant (stripped, casefolded). Applied at stage time (streamed,
-  `yield_per`, not `.all()`) **and** re-checked at merge time — single merge
-  409s on a pre-existing duplicate, merge-all skips dupes (count in logs).
-  Re-uploading a file skips everything already staged or posted.
+- **Fingerprint** (`services/fingerprint.py`, stored + indexed on
+  `transactions.fingerprint`): sha256 of account + date + signed amount +
+  tightly normalized merchant. Exact hits skip at stage time (streamed,
+  `yield_per`) and fill an empty note on the existing row; merge time
+  re-checks with broader casefold equality (409s) so pre-fingerprint rows
+  stay safe. Re-uploading a file skips everything already staged or posted.
+- **Merge-safe** (`GET .../review`, `POST .../merge-safe`): auto-merges rows
+  with no candidates and holds only obvious near-dupes — same date + amount
+  with an equal/containing merchant — as `pending` with reasons.
+  `merge-all` stays the force path (merges everything but exact dupes).
 - **Categorization tiers**: trusted file category → regex rules
   (`CategoryRule`, seed patterns in `categorization.py`) → BYOK AI (last tier,
   never overwrites `manual`) → Uncategorized.

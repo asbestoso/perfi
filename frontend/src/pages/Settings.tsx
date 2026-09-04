@@ -219,6 +219,29 @@ function Export() {
   );
 }
 
+function DangerZone({ bump }: any) {
+  const [msg, setMsg] = useState("");
+  async function clear() {
+    if (!window.confirm("Delete ALL data (transactions, imports, budgets, accounts, categories)? Settings are kept. This cannot be undone.")) return;
+    try {
+      const r = await api("/api/admin/clear", { method: "POST" });
+      const total = Object.values(r.deleted || {}).reduce((a: number, b: any) => a + Number(b), 0);
+      setMsg(`Cleared ${total} rows. Defaults reseeded.`);
+      bump();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  return (
+    <Card title="Danger zone">
+      <div className="flex items-center gap-2">
+        <button onClick={clear} className="rounded-md bg-red-700 px-3 py-1.5 text-sm text-white hover:bg-red-600">
+          Clear all data
+        </button>
+        {msg && <span className="text-sm text-slate-600">{msg}</span>}
+      </div>
+    </Card>
+  );
+}
+
 export default function Settings() {
   const [tick, setTick] = useState(0);
   const bump = () => setTick((t) => t + 1);
@@ -229,6 +252,7 @@ export default function Settings() {
       <Rules tick={tick} bump={bump} categories={categories} />
       <AI tick={tick} bump={bump} />
       <Export />
+      <DangerZone bump={bump} />
     </Page>
   );
 }

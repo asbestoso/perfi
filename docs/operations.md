@@ -35,14 +35,14 @@ which service died and why — that visibility is intentional, keep it.
 
 ## Database
 
-- Fresh start: delete `data/perfi.db*` and boot — migrations + seed run on
-  startup (11 categories). Nothing else to reset.
-- **Migrations stay squashed at one file.** To change schema: edit `models.py`,
-  `alembic revision --autogenerate`, then fold the delta into
-  `51171a03795c_initial_squashed_schema.py` and delete the new file. Verify
-  with `alembic upgrade head` on an empty DB + `alembic check` (must report
-  "No new upgrade operations detected"). Dev DBs stamped with a deleted
-  revision id must be deleted, not restamped — data/ is disposable.
+- Fresh start: Settings → Danger zone → Clear all data (wipes domain data,
+  keeps settings, reseeds categories), or delete `data/perfi.db*` and boot —
+  migrations + seed run on startup (11 categories).
+- **Migrations are incremental** (one revision per schema change on top of the
+  `51171a03795c` squash). To change schema: edit `models.py`,
+  `alembic revision --autogenerate`, adjust, verify with
+  `alembic upgrade head` on an empty DB + `alembic check` (must report
+  "No new upgrade operations detected").
 - Never commit `data/`: db files (`data/*.db*`) and the key
   (`data/.ai_key`) are gitignored. `backend/data/` must never exist — if you
   see it, some path helper regressed (see decisions log 2026-09-04).

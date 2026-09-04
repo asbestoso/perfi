@@ -28,8 +28,9 @@ SQLite file: `data/perfi.db` (WAL, auto-created + seeded on startup).
 
 - **Cents money**: all amounts stored as INTEGER cents (`services/money.py`).
 - **Import flow**: CSV/OFX stages rows into a review queue; merging posts
-  transactions. Dedupe key is account + date + amount + normalized merchant,
-  enforced at stage and re-checked at merge (`csv_import.py`, `reconcile.py`).
+  transactions. Identity is a persisted sha256 fingerprint (account + date +
+  signed amount + normalized merchant); Merge-safe auto-posts clean rows and
+  holds only obvious near-dupes for review (`fingerprint.py`, `reconcile.py`).
 - **Categorization tiers**: trusted file category -> regex rules ->
   BYOK AI (last tier, never overwrites manual) -> Uncategorized.
 - **Budgets**: monthly per-category limit cents + spend computed from transactions.

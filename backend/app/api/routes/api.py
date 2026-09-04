@@ -10,6 +10,7 @@ from ..deps import get_db
 from ..pagination import pagination
 from ...services import ai_provider, analytics, mcp_server, reconcile, settings_store
 from ...services.csv_import import import_csv
+from ...services.fingerprint import compute_fingerprint
 from ...services.lots_import import import_lots
 from ...services.ofx_import import import_ofx
 
@@ -179,6 +180,8 @@ def create_transaction(payload: schemas.TransactionCreate, db=Depends(get_db)):
     if payload.category_id is not None:
         _get_or_404(db, models.Category, payload.category_id)
     t = models.Transaction(**payload.model_dump())
+    t.fingerprint = compute_fingerprint(
+        t.date, t.amount_cents, t.account_id, t.merchant)
     db.add(t); db.commit(); db.refresh(t)
     return t
 
@@ -252,6 +255,25 @@ def resolve_row(id, staging_id: int, action="merge", db=Depends(get_db)):
 def merge_all(id, db=Depends(get_db)):
     merged, _skipped = reconcile.merge_batch(db, _as_int(id, "id"))
     return {"ok": True, "merged": merged}
+
+
+@router.get("/import/batches/{id}/review")
+def review_batch(id, db=Depends(get_db)):
+    safe, suspects = reconcile.classify_batch(db, _as_int(id, "id"))
+    return {"safe_ids": safe, "suspects": suspects,
+            "safe": len(safe), "needs_review": len(suspects)}
+
+
+@router.post("/import/batches/{id}/merge-safe")
+def merge_safe(id, db=Depends(get_db)):
+    merged, held = reconcile.merge_safe(db, _as_int(id, "id"))
+    return {"ok": True, "merged": merged, "held": held}
+
+
+@router.post("/admin/clear")
+def admin_clear(db=Depends(get_db)):
+    from ...services.admin import clear_database
+    return {"ok": True, "deleted": clear_database(db)}
 
 
 @router.get("/export/transactions")

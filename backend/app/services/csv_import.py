@@ -8,6 +8,7 @@ from sqlalchemy import select
 from ..logging_setup import get as get_log
 from ..models import Account, Category, CategoryRule, ImportBatch, StagingRow, Transaction
 from .categorization import resolve_category
+from .fingerprint import compute_fingerprint
 from .profiles import PROFILES, normalize_row
 
 log = get_log("import")
@@ -27,30 +28,41 @@ def norm_merchant(merchant):
     return (merchant or "").strip().casefold()
 
 
-def dedupe_key(account_id, date, amount_cents, merchant):
-    return (account_id, date.isoformat(), amount_cents, norm_merchant(merchant))
+def fingerprint_keys(db):
+    """All fingerprints already staged or posted.
 
-
-def dedupe_keys(db):
-    """All (account, date, amount, merchant) keys already staged or posted.
-
-    Streams in pages instead of materializing whole tables.
+    Posted rows read straight off the indexed fingerprint column;
+    staging rows are computed on the fly. Streams instead of
+    materializing whole tables.
     """
     keys = set()
-    txn_q = db.query(Transaction.account_id, Transaction.date,
-                     Transaction.amount_cents, Transaction.merchant)
-    for aid, d, cents, m in txn_q.yield_per(1000):
-        keys.add(dedupe_key(aid, d, cents, m))
-    stage_q = db.query(StagingRow.account_id, StagingRow.date,
-                       StagingRow.amount_cents, StagingRow.merchant).filter(
-        StagingRow.status != "discarded")
-    for aid, d, cents, m in stage_q.yield_per(1000):
-        keys.add(dedupe_key(aid, d, cents, m))
+    for (fp,) in db.query(Transaction.fingerprint).yield_per(1000):
+        if fp is not None:
+            keys.add(fp)
+    pairs = db.query(StagingRow, ImportBatch.account_id).join(
+        ImportBatch, StagingRow.batch_id == ImportBatch.id).filter(
+        StagingRow.status != "discarded").yield_per(1000)
+    for s, batch_aid in pairs:
+        aid = s.account_id if s.account_id is not None else batch_aid
+        keys.add(compute_fingerprint(s.date, s.amount_cents, aid, s.merchant))
     return keys
 
 
+def fold_note_into_match(db, fingerprint, note):
+    """Finance-app auto-merge metadata: fill an empty note on the match."""
+    if not note:
+        return
+    t = db.query(Transaction).filter_by(fingerprint=fingerprint).first()
+    if t is not None and not t.note:
+        t.note = note
+
+
 def transaction_exists(db, account_id, date, amount_cents, merchant):
-    """Merge-time recheck using the same normalization as dedupe_key."""
+    """Merge-time recheck: casefold equality, broader than the fingerprint.
+
+    Catches rows staged before fingerprints existed, so old pending rows
+    still cannot post a duplicate.
+    """
     want = norm_merchant(merchant)
     merchants = db.query(Transaction.merchant).filter_by(
         account_id=account_id, date=date, amount_cents=amount_cents).all()
@@ -69,7 +81,7 @@ def stage_rows(db, account_id, profile_name, filename, parsed):
     cats = {c.name: c.id for c in db.scalars(select(Category)).all()}
     cats_by_lower = {n.lower(): n for n in cats}
     unc_id = cats.get("Uncategorized")
-    seen = dedupe_keys(db)
+    seen = fingerprint_keys(db)
     rules = db.query(CategoryRule).order_by(CategoryRule.priority).all()
     override = None
     if account_id is not None:
@@ -84,11 +96,12 @@ def stage_rows(db, account_id, profile_name, filename, parsed):
     staged, skipped, accounts = 0, 0, set()
     for p, raw in parsed:
         acct = override or resolve_account(db, p.get("account", ""))
-        key = dedupe_key(acct.id, p["date"], p["amount_cents"], p["merchant"])
-        if key in seen:
+        fp = compute_fingerprint(p["date"], p["amount_cents"], acct.id, p["merchant"])
+        if fp in seen:
             skipped += 1
+            fold_note_into_match(db, fp, p["note"])
             continue
-        seen.add(key)
+        seen.add(fp)
         accounts.add(acct.name)
         if batch.account_id is None:
             batch.account_id = acct.id

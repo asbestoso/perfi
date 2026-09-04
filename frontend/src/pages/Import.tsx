@@ -82,6 +82,8 @@ function BatchList({ active, onSelect, tick }: any) {
 
 function RowQueue({ batchId, tick, onChange }: any) {
   const [filter, setFilter] = useState("pending");
+  const [review, setReview] = useState<any>(null);
+  const [msg, setMsg] = useState("");
   const data = useGet(`/api/import/batches/${batchId}/rows?status=${filter}&tick=${tick}`);
   const rows = data?.items || [];
   async function act(id: number, action: string) {
@@ -89,23 +91,74 @@ function RowQueue({ batchId, tick, onChange }: any) {
     onChange();
   }
   async function mergeAll() {
-    await api(`/api/import/batches/${batchId}/merge-all`, { method: "POST" });
-    onChange();
+    setMsg("Merging…");
+    try {
+      await api(`/api/import/batches/${batchId}/merge-all`, { method: "POST" });
+      setMsg("");
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  async function checkReview() {
+    setMsg("Checking…");
+    try {
+      const r = await api(`/api/import/batches/${batchId}/review`);
+      setReview(r);
+      setMsg("");
+      return r;
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); return null; }
+  }
+  async function mergeSafe() {
+    setMsg("Merging safe rows…");
+    try {
+      const r = await api(`/api/import/batches/${batchId}/merge-safe`, { method: "POST" });
+      await checkReview();
+      setMsg(`Merged ${r.merged}, held ${r.held.length} for review.`);
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
   }
   const btn = "rounded-md border border-slate-300 px-2 py-0.5 text-xs hover:bg-slate-100";
+  const byId: any = {};
+  rows.forEach((r: any) => { byId[r.id] = r; });
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <select value={filter} onChange={(e) => setFilter(e.target.value)}
           className="rounded-md border border-slate-300 px-2 py-1 text-sm">
           <option value="pending">Pending</option>
           <option value="merged">Merged</option>
           <option value="discarded">Discarded</option>
         </select>
-        <button onClick={mergeAll} className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700">
+        <button onClick={checkReview} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+          Review
+        </button>
+        <button onClick={mergeSafe} className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700">
+          Merge safe
+        </button>
+        <button onClick={mergeAll} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
           Merge all pending
         </button>
+        {msg && <span className="text-sm text-slate-600">{msg}</span>}
       </div>
+      {review && (
+        <p className="mb-2 text-sm text-slate-600">
+          {review.safe} safe, {review.needs_review} need review.
+          {review.needs_review > 0 && " Merge safe leaves the ones below pending."}
+        </p>
+      )}
+      {review?.suspects?.length > 0 && (
+        <ul className="mb-3 divide-y divide-slate-100 rounded-md border border-amber-200 bg-amber-50 px-3">
+          {review.suspects.map((s: any) => (
+            <li key={s.staging_id} className="py-1.5 text-sm">
+              <span className="font-medium">
+                {byId[s.staging_id]?.merchant || `#${s.staging_id}`} · {byId[s.staging_id]?.date || ""} · {byId[s.staging_id] != null ? dollars(byId[s.staging_id].amount_cents) : ""}
+              </span>
+              <ul className="list-disc pl-5 text-xs text-slate-600">
+                {s.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
       {rows.length === 0 ? (
         <p className="text-sm text-slate-500">Nothing here.</p>
       ) : (

@@ -44,6 +44,7 @@ class Transaction(Base):
     note = Column(Text, nullable=True)
     transfer_id = Column(String(64), nullable=True)
     category_source = Column(String(20), nullable=True)
+    fingerprint = Column(String(32), nullable=True, index=True)
     account = relationship("Account")
     category = relationship("Category", back_populates="transactions")
 
