@@ -2,6 +2,72 @@ import { useState } from "react";
 import { api } from "../main";
 import { Amt, Badge, btnCls, btnSecCls, btnSmCls, Card, dollars, Empty, inputCls, Page, tblCls, useGet } from "./_shared";
 
+function TransferSuggestions({ tick, onChange }: any) {
+  const data = useGet(`/api/transfers/suggestions?tick=${tick}`);
+  const [msg, setMsg] = useState("");
+  const [dismissed, setDismissed] = useState(false);
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const items = (Array.isArray(data) ? data : []).filter(
+    (s: any) => !dismissedIds.has(`${s.out_id}-${s.in_id}`)
+  );
+  async function link(s: any) {
+    await api(`/api/transfers/link?out_id=${s.out_id}&in_id=${s.in_id}&transfer_id=t${s.out_id}-${s.in_id}`,
+      { method: "POST" });
+  }
+  async function linkAll() {
+    setMsg("Linking high-confidence transfers…");
+    try {
+      await Promise.all(items.filter((s: any) => s.confidence === "high").map(link));
+      setDismissed(true);
+      setMsg(`Linked ${items.length} high-confidence transfer${items.length === 1 ? "" : "s"}.`);
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  async function linkOne(s: any) {
+    try {
+      await link(s);
+      setMsg("Transfer linked.");
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  function dismiss(s: any) {
+    setDismissedIds((ids) => new Set(ids).add(`${s.out_id}-${s.in_id}`));
+  }
+  if (dismissed || items.length === 0) return null;
+  return (
+    <Card title={`Transfer suggestions (${items.length})`}>
+      <p className="mb-3 text-sm text-slate-500">
+        Review these possible transfers before leaving the import flow.
+      </p>
+      <div className="mb-3 flex items-center gap-2">
+        <button onClick={linkAll} className={btnCls}>Link all high-confidence</button>
+        {msg && <span className="text-sm text-slate-600">{msg}</span>}
+      </div>
+      <ul className="divide-y divide-slate-100">
+        {items.map((s: any) => (
+          <li key={`${s.out_id}-${s.in_id}`} className="flex flex-wrap items-center justify-between gap-3 py-3 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium">
+                {s.outgoing.account} → {s.incoming.account}
+                <Badge tone="green">high confidence</Badge>
+              </p>
+              <p className="text-slate-500">
+                {s.outgoing.date} · {s.outgoing.merchant} · {dollars(s.outgoing.amount_cents)}
+                <span className="px-2">→</span>
+                {s.incoming.date} · {s.incoming.merchant} · {dollars(s.incoming.amount_cents)}
+              </p>
+            </div>
+            <div className="flex gap-1">
+              <button onClick={() => linkOne(s)} className={btnSmCls}>Link transfer</button>
+              <button onClick={() => dismiss(s)} className={btnSmCls}>Dismiss</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 function UploadForm({ onDone }: any) {
   const [profile, setProfile] = useState("empower");
   const [kind, setKind] = useState("csv");
@@ -196,7 +262,8 @@ export default function Import() {
 
   return (
     <Page title="Import">
-      <Card title="Upload">
+    <TransferSuggestions tick={tick} onChange={bump} />
+    <Card title="Upload">
         <p className="mb-2 text-sm text-slate-500">
           Accounts are matched by name from the file and created if new. Empower is the default CSV profile.
         </p>

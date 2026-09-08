@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { Amt, btnSmCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, useGet } from "./_shared";
+import { Amt, btnSmCls, Card, Empty, Error, inputCls, Page, tblCls, useGet } from "./_shared";
 
 const PAGE_SIZE = 50;
 
@@ -38,7 +38,7 @@ function TxnTable({ data, acctName, onRecat, onDelete, categories }: any) {
   const rows = data?.items || [];
   if (rows.length === 0) return <Empty>No transactions match.</Empty>;
   return (
-    <table className={tblCls}>
+    <table className={`${tblCls} transactions-table`}>
       <thead>
         <tr>
           <th>Date</th><th>Merchant</th><th>Account</th>
@@ -75,34 +75,6 @@ function TxnTable({ data, acctName, onRecat, onDelete, categories }: any) {
   );
 }
 
-function Transfers({ tick, bump }: any) {
-  const data = useGet(`/api/transfers/suggestions?tick=${tick}`);
-  const [msg, setMsg] = useState("");
-  const items = Array.isArray(data) ? data : [];
-  async function link(s: any) {
-    try {
-      await api(`/api/transfers/link?out_id=${s.out_id}&in_id=${s.in_id}&transfer_id=t${Date.now()}`,
-        { method: "POST" });
-      setMsg("Linked.");
-      bump();
-    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
-  }
-  if (items.length === 0) return null;
-  return (
-    <Card title={`Transfer suggestions (${items.length})`}>
-      {msg && <p className="mb-2 text-sm text-slate-600">{msg}</p>}
-      <ul className="divide-y divide-slate-100 text-sm">
-        {items.map((s: any) => (
-          <li key={`${s.out_id}-${s.in_id}`} className="flex items-center justify-between py-1">
-            <span>#{s.out_id} ↔ #{s.in_id} · {dollars(s.amount_cents)} · {s.date}</span>
-            <button onClick={() => link(s)} className={btnSmCls}>Link</button>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
-}
-
 export default function Transactions() {
   const [f, setF] = useState({ q: "", account_id: "", category_id: "", date_from: "", date_to: "", offset: 0 });
   const [tick, setTick] = useState(0);
@@ -134,7 +106,6 @@ export default function Transactions() {
   const page = Math.floor(f.offset / PAGE_SIZE);
   return (
     <Page title="Transactions">
-      <Transfers tick={tick} bump={bump} />
       <Card title={`All transactions (${total})`}>
         <Error data={data} />
         <Filters f={f} set={setF} accounts={accounts} categories={categories} />

@@ -49,6 +49,12 @@ table.ledger > tbody > tr > td {
 table.ledger > tbody > tr + tr > td {
   border-top: 1px solid var(--color-slate-100);
 }
+table.transactions-table > tbody > tr:nth-child(odd) > td {
+  background-color: #ffffff;
+}
+table.transactions-table > tbody > tr:nth-child(even) > td {
+  background-color: #f1f7fb;
+}
 table.ledger > tbody > tr:hover > td {
   background-color: color-mix(in srgb, var(--color-pine-100) 28%, transparent);
 }

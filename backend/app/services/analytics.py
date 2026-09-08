@@ -2,7 +2,7 @@
 from sqlalchemy import func, select
 
 from ..logging_setup import get as get_log
-from ..models import Budget, Category, Holding, Recurring, Transaction
+from ..models import Account, Budget, Category, Holding, Recurring, Transaction
 
 log = get_log("analytics")
 
@@ -150,7 +150,20 @@ def transfer_suggestions(db, window_days=3, limit=50):
             used.add(b.id)
             out.append({"out_id": out_tx.id, "in_id": in_tx.id,
                         "amount_cents": abs(a.amount_cents),
-                        "date": max(a.date, b.date).isoformat()})
+                        "date": max(a.date, b.date).isoformat(),
+                        "outgoing": {
+                            "merchant": out_tx.merchant,
+                            "date": out_tx.date.isoformat(),
+                            "amount_cents": out_tx.amount_cents,
+                            "account": db.get(Account, out_tx.account_id).name,
+                        },
+                        "incoming": {
+                            "merchant": in_tx.merchant,
+                            "date": in_tx.date.isoformat(),
+                            "amount_cents": in_tx.amount_cents,
+                            "account": db.get(Account, in_tx.account_id).name,
+                        },
+                        "confidence": "high"})
             break
     return out
 

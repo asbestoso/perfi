@@ -120,6 +120,9 @@ def test_transfer_suggestions_and_link(store, client):
     sugg = client.get("/api/transfers/suggestions").json()
     assert len(sugg) == 1
     assert sugg[0]["out_id"] == out["id"] and sugg[0]["in_id"] == inn["id"]
+    assert sugg[0]["outgoing"]["account"] == "Checking"
+    assert sugg[0]["incoming"]["account"] == "Card"
+    assert sugg[0]["confidence"] == "high"
 
     client.post(f"/api/transfers/link?out_id={out['id']}&in_id={inn['id']}&transfer_id=x1")
     assert client.get("/api/transfers/suggestions").json() == []
@@ -133,3 +136,24 @@ def test_transfer_suggestions_ignores_same_account_and_window(store, client):
     make_txn(client, a1, g, 900, "C", "2026-01-01")
     make_txn(client, a0, g, -900, "D", "2026-06-01")  # outside window: no match
     assert client.get("/api/transfers/suggestions").json() == []
+
+
+def test_linked_transfer_is_excluded_from_suggestions(store, client):
+    a0, a1 = store["accts"]
+    g = store["cats"]["Groceries"]
+    out = make_txn(client, a0, g, -2500, "Transfer out", "2026-05-10")
+    inn = make_txn(client, a1, g, 2500, "Transfer in", "2026-05-11")
+    other_out = make_txn(client, a0, g, -1200, "Other out", "2026-05-12")
+    other_in = make_txn(client, a1, g, 1200, "Other in", "2026-05-13")
+
+    suggestions = client.get("/api/transfers/suggestions").json()
+    assert len(suggestions) == 2
+
+    response = client.post(
+        f"/api/transfers/link?out_id={out['id']}&in_id={inn['id']}&transfer_id=dismissed"
+    )
+    assert response.status_code == 200
+    remaining = client.get("/api/transfers/suggestions").json()
+    assert len(remaining) == 1
+    assert remaining[0]["out_id"] == other_out["id"]
+    assert remaining[0]["in_id"] == other_in["id"]
