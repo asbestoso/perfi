@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnCls, Card, dollars, Error, inputCls, Page, today, useGet } from "./_shared";
+import { Amt, btnCls, Card, Empty, Error, inputCls, Page, tblCls, today, useGet } from "./_shared";
 
 const CADENCES = ["weekly", "biweekly", "monthly", "quarterly", "yearly"];
 
@@ -83,22 +83,22 @@ export default function Recurring() {
       <Card title={`All recurring (${items.length})`}>
         <Error data={data} />
         {items.length === 0 ? (
-          <p className="text-sm text-slate-500">None yet — run detection or add one above.</p>
+          <Empty>None yet — run detection or add one above.</Empty>
         ) : (
-          <table className="w-full text-sm">
+          <table className={tblCls}>
             <thead>
-              <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Name</th><th className="text-right">Amount</th>
+              <tr>
+                <th>Name</th><th className="text-right">Amount</th>
                 <th>Cadence</th><th>Next due</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {items.map((r: any) => (
                 <tr key={r.id}>
-                  <td className="py-1">{r.name}</td>
-                  <td className="text-right">{dollars(r.amount_cents)}</td>
+                  <td className="font-medium">{r.name}</td>
+                  <td className="text-right"><Amt cents={r.amount_cents} /></td>
                   <td className="text-slate-500">{r.cadence}</td>
-                  <td>{r.next_due}</td>
+                  <td className="tabular-nums">{r.next_due}</td>
                 </tr>
               ))}
             </tbody>

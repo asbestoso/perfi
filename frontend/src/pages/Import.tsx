@@ -1,15 +1,9 @@
 import { useState } from "react";
 import { api } from "../main";
-import { Card, Page, useGet } from "./_shared";
-
-function dollars(cents: any) {
-  return (Number(cents || 0) / 100).toLocaleString(undefined, {
-    style: "currency", currency: "USD",
-  });
-}
+import { Amt, Badge, btnCls, btnSecCls, btnSmCls, Card, dollars, Empty, inputCls, Page, tblCls, useGet } from "./_shared";
 
 function UploadForm({ onDone }: any) {
-  const [profile, setProfile] = useState("generic");
+  const [profile, setProfile] = useState("empower");
   const [kind, setKind] = useState("csv");
   const [msg, setMsg] = useState("");
   async function submit(e: any) {
@@ -24,34 +18,33 @@ function UploadForm({ onDone }: any) {
         `/api/import/${kind}?profile=${profile}`,
         { method: "POST", body: fd }
       );
+      const merged = await api(`/api/import/batches/${r.batch_id}/merge-safe`, { method: "POST" });
       const accts = (r.accounts || []).join(", ");
-      setMsg(`Staged ${r.staged}, skipped ${r.skipped} (batch ${r.batch_id})${accts ? ` → ${accts}` : ""}.`);
-      onDone();
+      const categories = (r.new_categories || []).join(", ");
+      setMsg(`Added ${merged.merged} automatically, held ${merged.held.length} for review (batch ${r.batch_id})${accts ? ` → ${accts}` : ""}${categories ? `. New categories: ${categories}` : ""}.`);
+      onDone(r.batch_id);
     } catch (err: any) {
       setMsg(`Failed: ${err.message}`);
     }
   }
-  const input = "rounded-md border border-slate-300 px-2 py-1 text-sm";
   return (
     <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
       <label className="text-sm">Type
-        <select value={kind} onChange={(e) => setKind(e.target.value)} className={`${input} ml-1`}>
+        <select value={kind} onChange={(e) => setKind(e.target.value)} className={`${inputCls} ml-1`}>
           <option value="csv">CSV</option>
           <option value="ofx">OFX</option>
         </select>
       </label>
       {kind === "csv" && (
         <label className="text-sm">Profile
-          <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${input} ml-1`}>
-            <option value="generic">Generic</option>
-            <option value="mint">Mint</option>
+          <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${inputCls} ml-1`}>
             <option value="empower">Empower</option>
-            <option value="monarch">Monarch</option>
+            <option value="mint">Mint</option>
           </select>
         </label>
       )}
-      <input name="file" type="file" accept={kind === "csv" ? ".csv" : ".ofx,.qfx"} className="text-sm text-slate-500 file:mr-2 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:bg-slate-700" />
-      <button className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700">Upload</button>
+      <input name="file" type="file" accept={kind === "csv" ? ".csv" : ".ofx,.qfx"} className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
+      <button className={btnCls}>Upload</button>
       {msg && <span className="text-sm text-slate-600">{msg}</span>}
     </form>
   );
@@ -60,19 +53,21 @@ function UploadForm({ onDone }: any) {
 function BatchList({ active, onSelect, tick }: any) {
   const data = useGet(`/api/import/batches?tick=${tick}`);
   const items = data?.items || [];
-  if (items.length === 0) return <p className="text-sm text-slate-500">No imports yet.</p>;
+  if (items.length === 0) return <Empty>No imports yet.</Empty>;
   return (
-    <ul className="divide-y divide-slate-100">
+    <ul className="space-y-1">
       {items.map((b: any) => (
         <li key={b.id}>
           <button
             onClick={() => onSelect(b.id)}
-            className={`flex w-full items-center justify-between py-2 text-left text-sm hover:bg-slate-50 ${
-              active === b.id ? "font-semibold" : ""
+            className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+              active === b.id ? "bg-pine-100/60 font-semibold" : "hover:bg-slate-50"
             }`}
           >
             <span>#{b.id} {b.filename || "(upload)"} · {b.profile}</span>
-            <span className="text-slate-500">staged {b.staged} · skipped {b.skipped}</span>
+            <span className="flex items-center gap-2 text-slate-500 tabular-nums">
+              staged {b.staged} · skipped {b.skipped}
+            </span>
           </button>
         </li>
       ))}
@@ -116,43 +111,44 @@ function RowQueue({ batchId, tick, onChange }: any) {
       onChange();
     } catch (e: any) { setMsg(`Failed: ${e.message}`); }
   }
-  const btn = "rounded-md border border-slate-300 px-2 py-0.5 text-xs hover:bg-slate-100";
   const byId: any = {};
   rows.forEach((r: any) => { byId[r.id] = r; });
+  const statusTone = (s: string) => s === "merged" ? "green" : s === "discarded" ? "slate" : "amber";
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}
-          className="rounded-md border border-slate-300 px-2 py-1 text-sm">
+        <select value={filter} onChange={(e) => setFilter(e.target.value)} className={inputCls}>
           <option value="pending">Pending</option>
+          <option value="duplicate">Duplicates</option>
           <option value="merged">Merged</option>
           <option value="discarded">Discarded</option>
         </select>
-        <button onClick={checkReview} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+        <button onClick={checkReview} className={btnSecCls}>
           Review
         </button>
-        <button onClick={mergeSafe} className="rounded-md bg-slate-900 px-3 py-1.5 text-sm text-white hover:bg-slate-700">
+        <button onClick={mergeSafe} className={btnCls}>
           Merge safe
         </button>
-        <button onClick={mergeAll} className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-100">
+        <button onClick={mergeAll} className={btnSecCls}>
           Merge all pending
         </button>
         {msg && <span className="text-sm text-slate-600">{msg}</span>}
       </div>
       {review && (
         <p className="mb-2 text-sm text-slate-600">
-          {review.safe} safe, {review.needs_review} need review.
+          <b className="tabular-nums">{review.safe}</b> safe, <b className="tabular-nums">{review.needs_review}</b> need review.
           {review.needs_review > 0 && " Merge safe leaves the ones below pending."}
         </p>
       )}
       {review?.suspects?.length > 0 && (
-        <ul className="mb-3 divide-y divide-slate-100 rounded-md border border-amber-200 bg-amber-50 px-3">
+        <ul className="mb-3 divide-y divide-amber-100 rounded-xl border border-amber-300 bg-amber-50 px-4">
           {review.suspects.map((s: any) => (
-            <li key={s.staging_id} className="py-1.5 text-sm">
+            <li key={s.staging_id} className="py-2 text-sm">
               <span className="font-medium">
-                {byId[s.staging_id]?.merchant || `#${s.staging_id}`} · {byId[s.staging_id]?.date || ""} · {byId[s.staging_id] != null ? dollars(byId[s.staging_id].amount_cents) : ""}
+                {s.merchant || byId[s.staging_id]?.merchant || `#${s.staging_id}`} · {s.date || byId[s.staging_id]?.date || ""} · {dollars(s.amount_cents ?? byId[s.staging_id]?.amount_cents)}
               </span>
-              <ul className="list-disc pl-5 text-xs text-slate-600">
+              {s.status === "duplicate" && <Badge tone="amber">duplicate</Badge>}
+              <ul className="list-disc pl-5 text-xs text-amber-900">
                 {s.reasons.map((r: string, i: number) => <li key={i}>{r}</li>)}
               </ul>
             </li>
@@ -160,27 +156,27 @@ function RowQueue({ batchId, tick, onChange }: any) {
         </ul>
       )}
       {rows.length === 0 ? (
-        <p className="text-sm text-slate-500">Nothing here.</p>
+        <Empty>Nothing here.</Empty>
       ) : (
-        <table className="w-full text-sm">
+        <table className={tblCls}>
           <thead>
-            <tr className="text-left text-xs uppercase text-slate-500">
-              <th className="py-1">Date</th><th>Merchant</th>
+            <tr>
+              <th>Date</th><th>Merchant</th>
               <th className="text-right">Amount</th><th>Status</th><th></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody>
             {rows.map((r: any) => (
               <tr key={r.id}>
-                <td className="py-1">{r.date}</td>
-                <td>{r.merchant}</td>
-                <td className="text-right">{dollars(r.amount_cents)}</td>
-                <td className="text-slate-500">{r.status}</td>
+                <td className="whitespace-nowrap tabular-nums text-slate-600">{r.date}</td>
+                <td className="font-medium">{r.merchant}</td>
+                <td className="text-right"><Amt cents={r.amount_cents} /></td>
+                <td><Badge tone={statusTone(r.status)}>{r.status}</Badge></td>
                 <td className="space-x-1 text-right">
-                  {r.status === "pending" && (
+                  {(r.status === "pending" || r.status === "duplicate") && (
                     <>
-                      <button onClick={() => act(r.id, "merge")} className={btn}>Merge</button>
-                      <button onClick={() => act(r.id, "discard")} className={btn}>Discard</button>
+                      <button onClick={() => act(r.id, "merge")} className={btnSmCls}>Merge</button>
+                      <button onClick={() => act(r.id, "discard")} className={btnSmCls}>Discard</button>
                     </>
                   )}
                 </td>
@@ -202,9 +198,9 @@ export default function Import() {
     <Page title="Import">
       <Card title="Upload">
         <p className="mb-2 text-sm text-slate-500">
-          Accounts are matched by name from the file and created if new. Use the Monarch profile for Monarch exports.
+          Accounts are matched by name from the file and created if new. Empower is the default CSV profile.
         </p>
-        <UploadForm onDone={bump} />
+        <UploadForm onDone={(id: number) => { setBatchId(id); bump(); }} />
       </Card>
       <Card title="Batches">
         <BatchList active={batchId} onSelect={setBatchId} tick={tick} />

@@ -97,7 +97,9 @@ def test_rules_crud_and_import_application(store, client):
 
     raw = b"date,merchant,amount\n2026-04-01,Sunday Farmers Market,-2200\n"
     assert client.post(f"/api/import/csv?account_id={a0}",
-                       files={"file": ("m.csv", raw, "text/csv")}).json() == {"batch_id": 1, "staged": 1, "skipped": 0, "accounts": ["Checking"]}
+                       files={"file": ("m.csv", raw, "text/csv")}).json() == {
+                           "batch_id": 1, "staged": 1, "skipped": 0,
+                           "accounts": ["Checking"], "new_categories": []}
     assert client.post("/api/import/batches/1/merge-all").json() == {"ok": True, "merged": 1}
     body = client.get("/api/transactions?q=farmers").json()
     assert body["total"] == 1

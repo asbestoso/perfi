@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnCls, btnSmCls, Card, dollars, Error, inputCls, Page, thisMonth, useGet } from "./_shared";
+import { Amt, Badge, btnCls, btnSmCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, thisMonth, useGet } from "./_shared";
 
-function paceBadge(pace: string) {
-  const color = pace === "over" ? "bg-red-100 text-red-800"
-    : pace === "ahead" ? "bg-amber-100 text-amber-800"
-    : "bg-green-100 text-green-800";
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{pace}</span>;
+function paceTone(pace: string) {
+  return pace === "over" ? "red" : pace === "ahead" ? "amber" : "green";
+}
+
+function barTone(pct: number) {
+  return pct >= 100 ? "bg-red-500" : pct >= 75 ? "bg-amber-500" : "bg-pine-600";
 }
 
 function AddBudget({ month, categories, onDone }: any) {
@@ -79,37 +80,34 @@ export default function Budgets() {
       <Card title={`${month} · ${rows.length} budgets`}>
         <Error data={rows.length ? null : data} />
         {rows.length === 0 ? (
-          <p className="text-sm text-slate-500">No budgets for this month yet.</p>
+          <Empty>No budgets for this month yet.</Empty>
         ) : (
-          <table className="w-full text-sm">
+          <table className={tblCls}>
             <thead>
-              <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Category</th><th className="text-right">Limit</th>
+              <tr>
+                <th>Category</th><th className="text-right">Limit</th>
                 <th className="text-right">Spent</th><th className="text-right">Remaining</th>
                 <th className="text-right">Progress</th><th>Pace</th><th></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {rows.map((b: any) => {
                 const pct = b.effective_cents > 0
                   ? Math.min(100, Math.round((b.spent_cents / b.effective_cents) * 100)) : 0;
                 return (
                   <tr key={b.budget_id}>
-                    <td className="py-1">{catById[b.category_id] || `#${b.category_id}`}
-                      {b.rolled_cents ? <span className="text-slate-400"> (+{dollars(b.rolled_cents)} roll)</span> : null}
+                    <td className="font-medium">{catById[b.category_id] || `#${b.category_id}`}
+                      {b.rolled_cents ? <span className="font-normal text-slate-400"> (+{dollars(b.rolled_cents)} roll)</span> : null}
                     </td>
-                    <td className="text-right">{dollars(b.effective_cents)}</td>
-                    <td className="text-right">{dollars(b.spent_cents)}</td>
-                    <td className={`text-right ${b.remaining_cents < 0 ? "text-red-700" : ""}`}>
-                      {dollars(b.remaining_cents)}
-                    </td>
-                    <td className="text-right">
+                    <td className="text-right tabular-nums">{dollars(b.effective_cents)}</td>
+                    <td className="text-right tabular-nums">{dollars(b.spent_cents)}</td>
+                    <td className="text-right"><Amt cents={b.remaining_cents} /></td>
+                    <td>
                       <div className="ml-auto h-2 w-24 overflow-hidden rounded-full bg-slate-100">
-                        <div className={`h-full ${pct >= 100 ? "bg-red-500" : "bg-slate-700"}`}
-                          style={{ width: `${pct}%` }} />
+                        <div className={`h-full ${barTone(pct)}`} style={{ width: `${pct}%` }} />
                       </div>
                     </td>
-                    <td>{paceBadge(b.pace)}</td>
+                    <td><Badge tone={paceTone(b.pace)}>{b.pace}</Badge></td>
                     <td className="text-right">
                       <button onClick={() => del(b.budget_id)} className={btnSmCls}>Delete</button>
                     </td>

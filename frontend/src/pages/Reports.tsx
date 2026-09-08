@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../main";
-import { btnCls, btnSmCls, Card, dollars, Error, inputCls, Page, thisMonth, useGet } from "./_shared";
+import { Amt, btnCls, btnSmCls, Card, chart, dollars, Error, inputCls, Page, Stat, tblCls, thisMonth, tooltipStyle, useGet } from "./_shared";
 
 const REPORT_TYPES = ["spending", "trends", "net_worth", "category_trends"];
 
@@ -12,42 +12,42 @@ function MonthReport({ month }: any) {
   if (!data || data.error) return <Error data={data} />;
   const spend = [...(data.spend_by_category || [])].sort(
     (a: any, b: any) => Math.abs(b.total_cents) - Math.abs(a.total_cents));
-  const chart = spend.slice(0, 10).map((s: any) => ({
+  const bars = spend.slice(0, 10).map((s: any) => ({
     name: catById[s.category_id] || "Uncategorized",
     total: Math.abs(s.total_cents) / 100,
   }));
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-4">
-        <Card title="Cash"><p className="text-xl font-semibold">{dollars(data.net_worth?.cash_cents)}</p></Card>
-        <Card title="Investments"><p className="text-xl font-semibold">{dollars(data.net_worth?.investments_cents)}</p></Card>
-        <Card title="Net worth"><p className="text-xl font-semibold">{dollars(data.net_worth?.net_worth_cents)}</p></Card>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Stat label="Cash">{dollars(data.net_worth?.cash_cents)}</Stat>
+        <Stat label="Investments">{dollars(data.net_worth?.investments_cents)}</Stat>
+        <Stat label="Net worth">{dollars(data.net_worth?.net_worth_cents)}</Stat>
       </div>
-      {chart.length > 0 && (
+      {bars.length > 0 && (
         <Card title="Top categories">
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={chart} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis type="number" tickFormatter={(v: number) => `$${v}`} />
-              <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
-              <Bar dataKey="total" fill="#0f172a" />
+            <BarChart data={bars} layout="vertical">
+              <CartesianGrid stroke={chart.grid} horizontal={false} />
+              <XAxis type="number" tickFormatter={(v: number) => `$${v}`} tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={{ stroke: chart.grid }} />
+              <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={false} />
+              <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} contentStyle={tooltipStyle} cursor={{ fill: "#e7ebe6" }} />
+              <Bar dataKey="total" fill="#14532b" radius={[0, 4, 4, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </Card>
       )}
       <Card title="Spend by category">
-        <table className="w-full text-sm">
+        <table className={tblCls}>
           <thead>
-            <tr className="text-left text-xs uppercase text-slate-500">
-              <th className="py-1">Category</th><th className="text-right">Total</th>
+            <tr>
+              <th>Category</th><th className="text-right">Total</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody>
             {spend.map((s: any) => (
               <tr key={s.category_id ?? "none"}>
-                <td className="py-1">{catById[s.category_id] || "Uncategorized"}</td>
-                <td className="text-right">{dollars(s.total_cents)}</td>
+                <td className="font-medium">{catById[s.category_id] || "Uncategorized"}</td>
+                <td className="text-right"><Amt cents={s.total_cents} /></td>
               </tr>
             ))}
           </tbody>
@@ -67,13 +67,13 @@ function Trends() {
     <Card title="Income vs expenses (12 mo)">
       <ResponsiveContainer width="100%" height={260}>
         <LineChart data={rows}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-          <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
-          <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
-          <Line type="monotone" dataKey="income" stroke="#15803d" dot={false} />
-          <Line type="monotone" dataKey="expense" stroke="#b91c1c" dot={false} />
-          <Line type="monotone" dataKey="net" stroke="#0f172a" dot={false} />
+          <CartesianGrid stroke={chart.grid} vertical={false} />
+          <XAxis dataKey="month" tick={{ fontSize: 11, fill: chart.tick }} tickLine={false} axisLine={{ stroke: chart.grid }} />
+          <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: chart.tick }} tickLine={false} axisLine={false} width={52} />
+          <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} contentStyle={tooltipStyle} />
+          <Line type="monotone" dataKey="income" stroke={chart.income} dot={false} strokeWidth={2} />
+          <Line type="monotone" dataKey="expense" stroke={chart.expense} dot={false} strokeWidth={2} />
+          <Line type="monotone" dataKey="net" stroke={chart.net} dot={false} strokeWidth={2} />
         </LineChart>
       </ResponsiveContainer>
     </Card>
@@ -103,11 +103,11 @@ function NetWorth({ tick, bump }: any) {
       ) : (
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={rows}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-            <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
-            <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} />
-            <Line type="monotone" dataKey="net" stroke="#0f172a" dot={false} />
+            <CartesianGrid stroke={chart.grid} vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 11, fill: chart.tick }} tickLine={false} axisLine={{ stroke: chart.grid }} />
+            <YAxis tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} tick={{ fill: chart.tick }} tickLine={false} axisLine={false} width={52} />
+            <Tooltip formatter={(v: any) => `$${Number(v).toLocaleString()}`} contentStyle={tooltipStyle} />
+            <Line type="monotone" dataKey="net" stroke={chart.net} dot={false} strokeWidth={2.5} />
           </LineChart>
         </ResponsiveContainer>
       )}

@@ -93,26 +93,37 @@ def stage_rows(db, account_id, profile_name, filename, parsed):
                         account_id=account_id)
     db.add(batch)
     db.flush()
-    staged, skipped, accounts = 0, 0, set()
+    staged, skipped, accounts, new_categories = 0, 0, set(), []
     for p, raw in parsed:
         acct = override or resolve_account(db, p.get("account", ""))
         fp = compute_fingerprint(p["date"], p["amount_cents"], acct.id, p["merchant"])
-        if fp in seen:
-            skipped += 1
+        dupe = fp in seen
+        if dupe:
             fold_note_into_match(db, fp, p["note"])
-            continue
         seen.add(fp)
         accounts.add(acct.name)
         if batch.account_id is None:
             batch.account_id = acct.id
         tname, tsource = trusted_category(cats_by_lower, p["category"])
+        imported_category = (p.get("category") or "").strip()
+        if tname is None and imported_category:
+            category = Category(name=imported_category)
+            db.add(category)
+            db.flush()
+            cats[category.name] = category.id
+            cats_by_lower[category.name.lower()] = category.name
+            tname, tsource = category.name, "import"
+            new_categories.append(category.name)
         if tname is None:
             tname, tsource = resolve_category(db, p["merchant"], rules)
+        # Exact dupes are held as duplicate rows for review, never silently
+        # dropped: the user discards them or force-merges (keep both).
         db.add(StagingRow(batch_id=batch.id, account_id=acct.id,
                           date=p["date"], merchant=p["merchant"],
                           amount_cents=p["amount_cents"],
                           category_id=cats.get(tname, unc_id),
                           category_source=tsource, note=p["note"] or None,
+                          status="duplicate" if dupe else "pending",
                           raw=json.dumps(raw, default=str)))
         staged += 1
     batch.staged, batch.skipped = staged, skipped
@@ -121,7 +132,7 @@ def stage_rows(db, account_id, profile_name, filename, parsed):
     log.info(f"batch {batch.id} ({profile_name} {filename or '-'}): "
              f"staged={staged} skipped={skipped} accounts={sorted(accounts)}")
     return {"batch_id": batch.id, "staged": staged, "skipped": skipped,
-            "accounts": sorted(accounts)}
+            "accounts": sorted(accounts), "new_categories": new_categories}
 
 
 def import_csv(db, account_id, raw, profile="generic", filename=""):

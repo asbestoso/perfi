@@ -66,19 +66,23 @@ def classify_batch(db, batch_id):
     posted = _posted_merchant_map(db)
     safe, suspects = [], []
     seen = set()
+
+    def held(s, status, reasons):
+        suspects.append({"staging_id": s.id, "status": status,
+                         "merchant": s.merchant, "date": s.date.isoformat(),
+                         "amount_cents": s.amount_cents, "reasons": reasons})
+
     for s in pending:
         aid, fp = meta[s.id]
         if fp in seen:
-            suspects.append({"staging_id": s.id,
-                             "reasons": ["exact duplicate of another row in this batch"]})
+            held(s, "pending", ["exact duplicate of another row in this batch"])
             continue
         seen.add(fp)
         key = (aid, s.date, s.amount_cents)
         names = posted.get(key, [])
         want = norm_merchant(s.merchant)
         if any(norm_merchant(m) == want for m in names):
-            suspects.append({"staging_id": s.id,
-                             "reasons": ["exact duplicate of an existing transaction"]})
+            held(s, "pending", ["exact duplicate of an existing transaction"])
             continue
         reasons, cited = [], set()
         for m in names:
@@ -100,9 +104,18 @@ def classify_batch(db, batch_id):
                         f"same date and amount as another row in this batch ('{p.merchant}')")
                     break
         if reasons:
-            suspects.append({"staging_id": s.id, "reasons": reasons})
+            held(s, "pending", reasons)
         else:
             safe.append(s.id)
+    for s in db.query(StagingRow).filter_by(
+            batch_id=b.id, status="duplicate").order_by(StagingRow.id).all():
+        aid = _row_account_id(s)
+        names = posted.get((aid, s.date, s.amount_cents), [])
+        want = norm_merchant(s.merchant)
+        if any(norm_merchant(m) == want for m in names):
+            held(s, "duplicate", ["exact duplicate of an existing transaction"])
+        else:
+            held(s, "duplicate", ["exact duplicate of another row in this batch"])
     return safe, suspects
 
 
@@ -128,10 +141,13 @@ def merge_row(db, staging_id):
     s = db.get(StagingRow, staging_id)
     if s is None:
         raise HTTPException(status_code=404, detail="Not found")
-    if s.status != "pending":
+    if s.status not in ("pending", "duplicate"):
         raise HTTPException(status_code=409, detail=f"already {s.status}")
-    if transaction_exists(db, _row_account_id(s), s.date, s.amount_cents, s.merchant):
+    if s.status == "pending" and transaction_exists(
+            db, _row_account_id(s), s.date, s.amount_cents, s.merchant):
         raise HTTPException(status_code=409, detail="duplicate of an existing transaction")
+    # A duplicate row merged on purpose is keep-both: the exists check is
+    # the user's to override, so it is skipped here.
     t = _staged_tx(s, _row_account_id(s))
     s.status = "merged"
     db.add(t)
@@ -145,7 +161,7 @@ def discard_row(db, staging_id):
     s = db.get(StagingRow, staging_id)
     if s is None:
         raise HTTPException(status_code=404, detail="Not found")
-    if s.status != "pending":
+    if s.status not in ("pending", "duplicate"):
         raise HTTPException(status_code=409, detail=f"already {s.status}")
     s.status = "discarded"
     db.commit()

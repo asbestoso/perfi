@@ -31,10 +31,11 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
 
 - **Fingerprint** (`services/fingerprint.py`, stored + indexed on
   `transactions.fingerprint`): sha256 of account + date + signed amount +
-  tightly normalized merchant. Exact hits skip at stage time (streamed,
-  `yield_per`) and fill an empty note on the existing row; merge time
-  re-checks with broader casefold equality (409s) so pre-fingerprint rows
-  stay safe. Re-uploading a file skips everything already staged or posted.
+  tightly normalized merchant. Exact hits stage as `duplicate` rows held for
+  review (never silently dropped) and fill an empty note on the existing row;
+  the user discards them or force-merges (keep both). Merge time re-checks
+  pending rows with broader casefold equality (409s) so pre-fingerprint rows
+  stay safe. `skipped` now counts only unparseable rows.
 - **Merge-safe** (`GET .../review`, `POST .../merge-safe`): auto-merges rows
   with no candidates and holds only obvious near-dupes — same date + amount
   with an equal/containing merchant — as `pending` with reasons.

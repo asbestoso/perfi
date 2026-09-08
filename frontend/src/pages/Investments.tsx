@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnCls, btnSmCls, Card, dollars, Error, inputCls, Page, useGet } from "./_shared";
+import { Amt, btnCls, btnSmCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, useGet } from "./_shared";
 
 function shares(milli: any) {
   return (Number(milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -111,7 +111,7 @@ function LotImport({ onDone }: any) {
   return (
     <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
       <input name="file" type="file" accept=".csv"
-        className="text-sm text-slate-500 file:mr-2 file:rounded-md file:border-0 file:bg-slate-900 file:px-3 file:py-1.5 file:text-sm file:text-white hover:file:bg-slate-700" />
+        className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
       <button className={btnCls}>Import lots CSV</button>
       {msg && <span className="text-sm text-slate-600">{msg}</span>}
     </form>
@@ -134,39 +134,33 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
-      <div className="grid grid-cols-3 gap-4">
-        <Card title="Market value"><p className="text-xl font-semibold">{dollars(summary?.market_cents)}</p></Card>
-        <Card title="Cost basis"><p className="text-xl font-semibold">{dollars(summary?.cost_cents)}</p></Card>
-        <Card title="Gain / loss">
-          <p className={`text-xl font-semibold ${(summary?.gain_cents || 0) < 0 ? "text-red-700" : "text-green-700"}`}>
-            {dollars(summary?.gain_cents)}
-          </p>
-        </Card>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
+        <Stat label="Cost basis">{dollars(summary?.cost_cents)}</Stat>
+        <Stat label="Gain / loss"><Amt cents={summary?.gain_cents} /></Stat>
       </div>
       <Card title={`Positions (${positions.length})`}>
         <Error data={summary} />
         {positions.length === 0 ? (
-          <p className="text-sm text-slate-500">No positions yet — add a holding below.</p>
+          <Empty>No positions yet — add a holding below.</Empty>
         ) : (
-          <table className="w-full text-sm">
+          <table className={tblCls}>
             <thead>
-              <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Symbol</th><th className="text-right">Shares</th>
+              <tr>
+                <th>Symbol</th><th className="text-right">Shares</th>
                 <th className="text-right">Price</th><th className="text-right">Market</th>
                 <th className="text-right">Cost</th><th className="text-right">Gain</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {positions.map((p: any) => (
                 <tr key={p.symbol}>
-                  <td className="py-1 font-medium">{p.symbol}</td>
-                  <td className="text-right">{shares(p.quantity_milli)}</td>
-                  <td className="text-right">{dollars(p.price_cents)}</td>
-                  <td className="text-right">{dollars(p.market_cents)}</td>
-                  <td className="text-right">{p.cost_cents == null ? "—" : dollars(p.cost_cents)}</td>
-                  <td className={`text-right ${p.gain_cents == null ? "" : p.gain_cents < 0 ? "text-red-700" : "text-green-700"}`}>
-                    {p.gain_cents == null ? "—" : dollars(p.gain_cents)}
-                  </td>
+                  <td className="font-medium">{p.symbol}</td>
+                  <td className="text-right tabular-nums">{shares(p.quantity_milli)}</td>
+                  <td className="text-right tabular-nums">{dollars(p.price_cents)}</td>
+                  <td className="text-right tabular-nums">{dollars(p.market_cents)}</td>
+                  <td className="text-right"><Amt cents={p.cost_cents} /></td>
+                  <td className="text-right"><Amt cents={p.gain_cents} /></td>
                 </tr>
               ))}
             </tbody>
@@ -181,20 +175,20 @@ export default function Investments() {
         <AddLot onDone={bump} />
         <div className="mt-3"><LotImport onDone={bump} /></div>
         {lotItems.length > 0 && (
-          <table className="mt-3 w-full text-sm">
+          <table className={`${tblCls} mt-3`}>
             <thead>
-              <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Symbol</th><th className="text-right">Shares</th>
+              <tr>
+                <th>Symbol</th><th className="text-right">Shares</th>
                 <th className="text-right">Cost</th><th>Acquired</th><th></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {lotItems.map((l: any) => (
                 <tr key={l.id}>
-                  <td className="py-1">{l.symbol}</td>
-                  <td className="text-right">{shares(l.quantity_milli)}</td>
-                  <td className="text-right">{dollars(l.cost_cents)}</td>
-                  <td className="text-slate-500">{l.acquired || "—"}</td>
+                  <td className="font-medium">{l.symbol}</td>
+                  <td className="text-right tabular-nums">{shares(l.quantity_milli)}</td>
+                  <td className="text-right"><Amt cents={l.cost_cents} /></td>
+                  <td className="tabular-nums text-slate-500">{l.acquired || "—"}</td>
                   <td className="text-right">
                     <button onClick={() => delLot(l.id)} className={btnSmCls}>Delete</button>
                   </td>

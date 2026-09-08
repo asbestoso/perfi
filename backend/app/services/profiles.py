@@ -1,4 +1,4 @@
-"""Source profiles for CSV import: Mint, Empower, generic.
+"""Source profiles for CSV import: Empower, Mint, generic.
 
 A profile maps source-specific columns onto canonical fields and declares
 how money signs work. Dates: ISO always accepted, plus MM/DD/YYYY[YY] for
@@ -14,7 +14,7 @@ PROFILES = {
         "type": [],
         "debit_values": [],
         "credit_values": [],
-        "category": [],
+        "category": ["category"],
         "note": ["note", "memo"],
         "account": ["account"],
     },
@@ -31,24 +31,13 @@ PROFILES = {
     },
     "empower": {
         "date": ["date", "posted date"],
-        "merchant": ["description", "original description", "name"],
+        "merchant": ["description", "original description", "merchant", "name"],
         "amount": ["amount"],
         "type": ["type", "transaction type"],
         "debit_values": ["debit", "withdrawal", "expense"],
         "credit_values": ["credit", "deposit", "income"],
         "category": ["category"],
         "note": ["memo", "notes"],
-        "account": ["account"],
-    },
-    "monarch": {
-        "date": ["date"],
-        "merchant": ["description", "merchant"],
-        "amount": ["amount"],
-        "type": [],
-        "debit_values": [],
-        "credit_values": [],
-        "category": ["category"],
-        "note": ["tags"],
         "account": ["account"],
     },
 }
@@ -90,7 +79,7 @@ def signed_cents(amount_str, type_str, profile):
 
 
 def normalize_row(profile_name, row):
-    profile = PROFILES.get(profile_name or "generic", PROFILES["generic"])
+    profile = PROFILES.get(profile_name or "empower", PROFILES["empower"])
     date = parse_date(pick(row, profile["date"]))
     if date is None:
         return None

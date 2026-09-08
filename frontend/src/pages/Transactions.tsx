@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnSmCls, Card, dollars, Error, inputCls, Page, useGet } from "./_shared";
+import { Amt, btnSmCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, useGet } from "./_shared";
 
 const PAGE_SIZE = 50;
 
@@ -36,28 +36,29 @@ function Filters({ f, set, accounts, categories }: any) {
 
 function TxnTable({ data, acctName, onRecat, onDelete, categories }: any) {
   const rows = data?.items || [];
-  if (rows.length === 0) return <p className="text-sm text-slate-500">No transactions match.</p>;
+  if (rows.length === 0) return <Empty>No transactions match.</Empty>;
   return (
-    <table className="w-full text-sm">
+    <table className={tblCls}>
       <thead>
-        <tr className="text-left text-xs uppercase text-slate-500">
-          <th className="py-1">Date</th><th>Merchant</th><th>Account</th>
+        <tr>
+          <th>Date</th><th>Merchant</th><th>Account</th>
           <th className="text-right">Amount</th><th>Category</th><th></th>
         </tr>
       </thead>
-      <tbody className="divide-y divide-slate-100">
+      <tbody>
         {rows.map((t: any) => (
           <tr key={t.id}>
-            <td className="py-1">{t.date}</td>
-            <td>{t.merchant}{t.note && <span className="text-slate-400"> · {t.note}</span>}</td>
-            <td className="text-slate-500">{acctName(t.account_id)}</td>
-            <td className={`text-right ${t.amount_cents < 0 ? "" : "text-green-700"}`}>
-              {dollars(t.amount_cents)}
+            <td className="whitespace-nowrap tabular-nums text-slate-600">{t.date}</td>
+            <td>
+              <span className="font-medium">{t.merchant}</span>
+              {t.note && <span className="text-slate-400"> · {t.note}</span>}
             </td>
+            <td className="text-slate-500">{acctName(t.account_id)}</td>
+            <td className="text-right"><Amt cents={t.amount_cents} /></td>
             <td>
               <select value={t.category_id ?? ""} title={`source: ${t.category_source || "?"}`}
                 onChange={(e) => onRecat(t.id, e.target.value ? Number(e.target.value) : null)}
-                className="rounded-md border border-slate-200 px-1 py-0.5 text-xs">
+                className="rounded-md border border-slate-300 bg-white px-1.5 py-1 text-xs outline-none focus:border-pine-600">
                 <option value="">—</option>
                 {(categories?.items || []).map((c: any) => (
                   <option key={c.id} value={c.id}>{c.name}</option>

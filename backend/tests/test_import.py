@@ -23,7 +23,8 @@ def db():
 def test_import_stages_categorized_rows(db):
     raw = b"date,merchant,amount\n2026-01-05,Whole Foods,-12.34\n2026-01-06,Starbucks,-5.50\n"
     result = import_csv(db, 1, raw)
-    assert result == {"batch_id": 1, "staged": 2, "skipped": 0, "accounts": ["Checking"]}
+    assert result == {"batch_id": 1, "staged": 2, "skipped": 0,
+                      "accounts": ["Checking"], "new_categories": []}
     assert db.query(models.Transaction).count() == 0  # nothing merged yet
     rows = db.query(models.StagingRow).order_by(models.StagingRow.id).all()
     names = {c.id: c.name for c in db.query(models.Category).all()}
@@ -33,15 +34,39 @@ def test_import_stages_categorized_rows(db):
     assert names[rows[1].category_id] == "Dining"
 
 
-def test_import_skips_duplicates_and_bad_rows(db):
+def test_import_holds_duplicates_and_skips_bad_rows(db):
     raw = b"date,merchant,amount\n2026-01-05,Whole Foods,-12.34\n2026-01-05,Whole Foods,-12.34\n,,\n"
-    assert import_csv(db, 1, raw) == {"batch_id": 1, "staged": 1, "skipped": 2, "accounts": ["Checking"]}
-    assert import_csv(db, 1, raw)["skipped"] == 3
+    assert import_csv(db, 1, raw) == {"batch_id": 1, "staged": 2, "skipped": 1,
+                                      "accounts": ["Checking"], "new_categories": []}
+    rows = db.query(models.StagingRow).order_by(models.StagingRow.id).all()
+    assert [r.status for r in rows] == ["pending", "duplicate"]
+    again = import_csv(db, 1, raw)
+    assert again["staged"] == 2 and again["skipped"] == 1
+    assert db.query(models.StagingRow).filter_by(status="duplicate").count() == 3
 
 
 def test_import_accepts_description_column(db):
     raw = b"date,description,amount\n2026-02-01,NETFLIX,-15.99\n"
     assert import_csv(db, 1, raw)["staged"] == 1
+
+
+def test_generic_profile_imports_category_column(db):
+    raw = b"date,merchant,amount,category\n2026-02-01,Local Market,-15.99,Groceries\n"
+    assert import_csv(db, 1, raw)["staged"] == 1
+    row = db.query(models.StagingRow).one()
+    category = db.get(models.Category, row.category_id)
+    assert category.name == "Groceries"
+    assert row.category_source == "import"
+
+
+def test_import_creates_missing_categories(db):
+    raw = b"date,merchant,amount,category\n2026-02-01,Train,-15.99,Travel\n2026-02-02,Hotel,-80.00,Travel\n"
+    result = import_csv(db, 1, raw)
+    assert result["new_categories"] == ["Travel"]
+    category = db.query(models.Category).filter_by(name="Travel").one()
+    rows = db.query(models.StagingRow).order_by(models.StagingRow.id).all()
+    assert [row.category_id for row in rows] == [category.id, category.id]
+    assert all(row.category_source == "import" for row in rows)
 
 
 def _upload(client, acct, body, profile="generic", name="s.csv"):
@@ -60,7 +85,8 @@ def test_mint_profile(store, client):
     acct = store["acct"]
     r = _upload(client, acct, MINT_CSV, profile="mint", name="mint.csv")
     assert r.status_code == 200, r.text
-    assert r.json() == {"batch_id": 1, "staged": 2, "skipped": 0, "accounts": ["Checking"]}
+    assert r.json() == {"batch_id": 1, "staged": 2, "skipped": 0,
+                        "accounts": ["Checking"], "new_categories": []}
     rows = client.get("/api/import/batches/1/rows").json()
     assert rows["total"] == 2
     by_merchant = {t["merchant"]: t for t in rows["items"]}
@@ -116,13 +142,19 @@ def test_resolve_merge_discard_merge_all(store, client):
     assert detail["by_status"] == {"merged": 1, "discarded": 1}
 
 
-def test_reimport_after_merge_skips_everything(store, client):
+def test_reimport_after_merge_holds_duplicate(store, client):
     acct = store["acct"]
     body = b"date,merchant,amount\n2026-01-05,A,-100\n"
     _upload(client, acct, body)
     client.post("/api/import/batches/1/merge-all")
     r = _upload(client, acct, body)
-    assert r.json() == {"batch_id": 2, "staged": 0, "skipped": 1, "accounts": []}
+    assert r.json() == {"batch_id": 2, "staged": 1, "skipped": 0,
+                        "accounts": ["Checking"], "new_categories": []}
+    rows = client.get("/api/import/batches/2/rows").json()
+    assert rows["total"] == 1 and rows["items"][0]["status"] == "duplicate"
+    # merge-all leaves held duplicates alone; nothing double-posts
+    assert client.post("/api/import/batches/2/merge-all").json() == {"ok": True, "merged": 0}
+    assert client.get("/api/transactions").json()["total"] == 1
 
 
 def test_merge_refuses_preexisting_duplicate(store, client):
@@ -203,7 +235,7 @@ def test_accounts_mapped_by_name_and_created(store, client):
     body = ("Date,Account,Description,Category,Tags,Amount\n"
             "2026-01-05,Savings,Whole Foods,Groceries,,-12.34\n"
             "2026-01-06,Brokerage,Dividend,,,15.00\n")
-    r = client.post("/api/import/csv?profile=monarch",
+    r = client.post("/api/import/csv?profile=empower",
                     files={"file": ("m.csv", body, "text/csv")})
     assert r.status_code == 200, r.text
     assert r.json()["accounts"] == ["Brokerage", "Savings"]
@@ -222,7 +254,7 @@ def test_account_override_forces_single_account(store, client):
     acct = store["acct"]
     body = ("Date,Account,Description,Category,Tags,Amount\n"
             "2026-01-05,Savings,Whole Foods,Groceries,,-12.34\n")
-    r = client.post(f"/api/import/csv?account_id={acct}&profile=monarch",
+    r = client.post(f"/api/import/csv?account_id={acct}&profile=empower",
                     files={"file": ("m.csv", body, "text/csv")}).json()
     assert r["accounts"] == ["Checking"]
     assert "Savings" not in [a["name"] for a in client.get("/api/accounts").json()["items"]]
@@ -254,24 +286,27 @@ def test_monarch_ground_truth_end_to_end(store, client):
     started = time.time()
 
     # 1. upload exactly like the Import page does
-    r = client.post(f"/api/import/csv?account_id={acct}&profile=monarch",
+    r = client.post(f"/api/import/csv?account_id={acct}&profile=empower",
                     files={"file": ("test.csv", raw, "text/csv")})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["staged"] + body["skipped"] == 7151
     assert body["staged"] > 6900  # file itself holds ~160 exact-dupe rows
 
-    # 2. review queue
+    # 2. review queue (exact dupes are held as duplicate rows, not dropped)
     detail = client.get(f"/api/import/batches/{body['batch_id']}").json()
-    assert detail["profile"] == "monarch"
-    assert detail["by_status"] == {"pending": body["staged"]}
+    assert detail["profile"] == "empower"
+    by_status = detail["by_status"]
+    assert by_status.get("duplicate", 0) > 0  # file holds ~160 exact-dupe rows
+    assert by_status.get("pending", 0) + by_status.get("duplicate", 0) == body["staged"]
+    pending = by_status.get("pending", 0)
     rows = client.get(f"/api/import/batches/{body['batch_id']}/rows?status=pending&limit=5").json()
-    assert rows["total"] == body["staged"]
+    assert rows["total"] == pending
 
-    # 3. merge everything into the ledger
+    # 3. merge pending rows into the ledger (duplicates stay held)
     r = client.post(f"/api/import/batches/{body['batch_id']}/merge-all").json()
-    assert r == {"ok": True, "merged": body["staged"]}
-    assert client.get("/api/transactions?limit=1").json()["total"] == body["staged"]
+    assert r == {"ok": True, "merged": pending}
+    assert client.get("/api/transactions?limit=1").json()["total"] == pending
 
     # 4. spot-check a known ground-truth row end to end
     # (fixture is anonymized: Merchant 0003/0004 are a -/+ pair, ex -162/+162c)
@@ -280,14 +315,19 @@ def test_monarch_ground_truth_end_to_end(store, client):
     assert -242 in [t["amount_cents"] for t in neg]
     assert 242 in [t["amount_cents"] for t in pos]
 
-    # 5. export round-trips every row
+    # 5. export round-trips every merged row
     lines = client.get(f"/api/export/transactions?account_id={acct}").text.strip().splitlines()
-    assert len(lines) == body["staged"] + 1
+    assert len(lines) == pending + 1
 
-    # 6. re-upload dedupes everything
-    again = client.post(f"/api/import/csv?account_id={acct}&profile=monarch",
+    # 6. re-upload holds everything as duplicates, double-posts nothing
+    again = client.post(f"/api/import/csv?account_id={acct}&profile=empower",
                         files={"file": ("test.csv", raw, "text/csv")}).json()
-    assert again == {"batch_id": body["batch_id"] + 1, "staged": 0, "skipped": 7151, "accounts": []}
+    assert again["batch_id"] == body["batch_id"] + 1
+    assert again["staged"] == body["staged"] and again["skipped"] == body["skipped"]
+    assert again["accounts"] == ["Checking"]
+    assert client.post(f"/api/import/batches/{again['batch_id']}/merge-all").json() == {
+        "ok": True, "merged": 0}
+    assert client.get("/api/transactions?limit=1").json()["total"] == pending
 
     elapsed = time.time() - started
     assert elapsed < 120, f"7151-row import took {elapsed:.1f}s"

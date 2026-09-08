@@ -15,25 +15,36 @@ def test_merge_safe_holds_only_obvious_dupes(store, client):
             b"2026-01-05,WHOLEFDS MKT #42,-12.34\n"  # reworded, no shared run: safe
             b"2026-01-06,Whole Foods,-12.34\n"       # same merchant, next day: safe
             b"2026-01-06,Starbucks,-5.50\n")         # safe
-    assert _upload(client, acct, body).json()["staged"] == 4
+    assert _upload(client, acct, body).json()["staged"] == 5
 
     r = client.get("/api/import/batches/1/review")
     assert r.status_code == 200, r.text
     review = r.json()
-    assert review["safe"] == 3 and review["needs_review"] == 1
+    assert review["safe"] == 3 and review["needs_review"] == 2
     assert len(review["safe_ids"]) == 3
     held_ids = {h["staging_id"] for h in review["suspects"]}
     assert held_ids.isdisjoint(review["safe_ids"])
-    assert "near-identical" in review["suspects"][0]["reasons"][0]
+    by_status = {h["status"] for h in review["suspects"]}
+    assert by_status == {"pending", "duplicate"}
+    assert all(h["merchant"] and h["date"] for h in review["suspects"])
 
     r = client.post("/api/import/batches/1/merge-safe")
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["ok"] is True and out["merged"] == 3 and len(out["held"]) == 1
+    assert out["ok"] is True and out["merged"] == 3 and len(out["held"]) == 2
     assert client.get("/api/transactions").json()["total"] == 4
 
     rows = client.get("/api/import/batches/1/rows?status=pending&limit=100").json()
-    assert rows["total"] == 1  # the suspect stays pending for review
+    assert rows["total"] == 1  # the near-identical suspect stays pending
+    dupes = client.get("/api/import/batches/1/rows?status=duplicate&limit=100").json()
+    assert dupes["total"] == 1  # the exact dupe stays held, not dropped
+
+    # force-merge the held duplicate (keep both), then it is gone from review
+    dupe_id = dupes["items"][0]["id"]
+    r = client.post(f"/api/import/batches/1/resolve?staging_id={dupe_id}&action=merge")
+    assert r.status_code == 200, r.text
+    assert client.get("/api/transactions").json()["total"] == 5
+    assert client.get("/api/import/batches/1/review").json()["needs_review"] == 1
 
 
 def test_merge_safe_holds_in_batch_near_dupes(store, client):
@@ -88,7 +99,8 @@ def test_stage_folds_note_into_exact_match(store, client):
     make_txn(client, acct, None, -1234, "Whole Foods", "2026-01-05")
     body = b"date,merchant,amount,note\n2026-01-05,Whole Foods,-12.34,weekly shop\n"
     assert _upload(client, acct, body).json() == {
-        "batch_id": 1, "staged": 0, "skipped": 1, "accounts": []}
+        "batch_id": 1, "staged": 1, "skipped": 0, "accounts": ["Checking"],
+        "new_categories": []}
     txns = client.get("/api/transactions").json()["items"]
     assert txns[0]["note"] == "weekly shop"
 

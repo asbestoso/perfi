@@ -187,7 +187,7 @@ def create_transaction(payload: schemas.TransactionCreate, db=Depends(get_db)):
 
 
 @router.post("/import/csv")
-def csv_import(file: UploadFile, account_id=None, profile="generic", db=Depends(get_db)):
+def csv_import(file: UploadFile, account_id=None, profile="empower", db=Depends(get_db)):
     aid = None
     if account_id is not None:
         aid = _as_int(account_id, "account_id")

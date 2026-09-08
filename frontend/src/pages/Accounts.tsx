@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnCls, Card, dollars, Error, inputCls, Page, useGet } from "./_shared";
+import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, useGet } from "./_shared";
 
 const TYPES = ["checking", "savings", "credit", "brokerage", "loan", "other"];
 
@@ -58,20 +58,20 @@ export default function Accounts() {
       <Card title={`All accounts (${items.length}) · total ${dollars(total)}`}>
         <Error data={data} />
         {items.length === 0 ? (
-          <p className="text-sm text-slate-500">No accounts yet — add one above or import a CSV.</p>
+          <Empty>No accounts yet — add one above or import a CSV.</Empty>
         ) : (
-          <table className="w-full text-sm">
+          <table className={tblCls}>
             <thead>
-              <tr className="text-left text-xs uppercase text-slate-500">
-                <th className="py-1">Name</th><th>Type</th><th className="text-right">Balance</th>
+              <tr>
+                <th>Name</th><th>Type</th><th className="text-right">Balance</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {items.map((a: any) => (
                 <tr key={a.id}>
-                  <td className="py-1">{a.name}</td>
+                  <td className="font-medium">{a.name}</td>
                   <td className="text-slate-500">{a.type}</td>
-                  <td className="text-right">{dollars(a.balance_cents)}</td>
+                  <td className="text-right"><Amt cents={a.balance_cents} /></td>
                 </tr>
               ))}
             </tbody>

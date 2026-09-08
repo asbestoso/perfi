@@ -1,5 +1,5 @@
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { Card, Page, useGet } from "./_shared";
+import { Badge, Card, chart, Page, Stat, tooltipStyle, useGet } from "./_shared";
 
 function dollars(cents: any) {
   const n = Number(cents || 0) / 100;
@@ -11,11 +11,8 @@ function thisMonth() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function paceBadge(pace: string) {
-  const color = pace === "over" ? "bg-red-100 text-red-800"
-    : pace === "ahead" ? "bg-amber-100 text-amber-800"
-    : "bg-green-100 text-green-800";
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{pace.replace("_", " ")}</span>;
+function paceTone(pace: string) {
+  return pace === "over" ? "red" : pace === "ahead" ? "amber" : "green";
 }
 
 export default function Dashboard() {
@@ -40,27 +37,20 @@ export default function Dashboard() {
     <Page title="Dashboard">
       {net != null && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          {[
-            ["Net worth", net.net_worth_cents],
-            ["Cash", net.cash_cents],
-            ["Investments", net.investments_cents],
-          ].map(([label, cents]) => (
-            <div key={label} className="rounded-xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
-              <div className="text-sm text-slate-500">{label}</div>
-              <div className="text-2xl font-bold">{dollars(cents)}</div>
-            </div>
-          ))}
+          <Stat label="Net worth">{dollars(net.net_worth_cents)}</Stat>
+          <Stat label="Cash">{dollars(net.cash_cents)}</Stat>
+          <Stat label="Investments">{dollars(net.investments_cents)}</Stat>
         </div>
       )}
       <Card title="Net worth history">
         {histRows.length > 0 ? (
           <ResponsiveContainer width="100%" height={220}>
             <LineChart data={histRows}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={(v: number) => `$${v / 1000}k`} tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(v: any) => dollars(Number(v) * 100)} />
-              <Line type="monotone" dataKey="net" stroke="#2563eb" dot={false} strokeWidth={2} />
+              <CartesianGrid stroke={chart.grid} vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={{ stroke: chart.grid }} />
+              <YAxis tickFormatter={(v: number) => `$${v / 1000}k`} tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={false} width={52} />
+              <Tooltip formatter={(v: any) => dollars(Number(v) * 100)} contentStyle={tooltipStyle} />
+              <Line type="monotone" dataKey="net" stroke={chart.net} dot={false} strokeWidth={2.5} />
             </LineChart>
           </ResponsiveContainer>
         ) : (
@@ -70,13 +60,13 @@ export default function Dashboard() {
       <Card title="Income vs expense (6 mo)">
         {trendRows.length > 0 ? (
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={trendRows}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} />
-              <YAxis tickFormatter={(v: number) => `$${v / 1000}k`} tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(v: any) => dollars(Number(v) * 100)} />
-              <Bar dataKey="income" fill="#16a34a" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="expense" fill="#dc2626" radius={[4, 4, 0, 0]} />
+            <BarChart data={trendRows} barCategoryGap="28%">
+              <CartesianGrid stroke={chart.grid} vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={{ stroke: chart.grid }} />
+              <YAxis tickFormatter={(v: number) => `$${v / 1000}k`} tick={{ fontSize: 12, fill: chart.tick }} tickLine={false} axisLine={false} width={52} />
+              <Tooltip formatter={(v: any) => dollars(Number(v) * 100)} contentStyle={tooltipStyle} cursor={{ fill: "#e7ebe6" }} />
+              <Bar dataKey="income" fill={chart.income} radius={[4, 4, 0, 0]} />
+              <Bar dataKey="expense" fill={chart.expense} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
@@ -90,8 +80,8 @@ export default function Dashboard() {
               <li key={b.budget_id} className="flex items-center justify-between py-2 text-sm">
                 <span>Category {b.category_id}</span>
                 <span className="flex items-center gap-2">
-                  <span className="text-slate-500">{dollars(b.spent_cents)} of {dollars(b.effective_cents)}</span>
-                  {paceBadge(b.pace)}
+                  <span className="text-slate-500 tabular-nums">{dollars(b.spent_cents)} of {dollars(b.effective_cents)}</span>
+                  <Badge tone={paceTone(b.pace)}>{b.pace.replace("_", " ")}</Badge>
                 </span>
               </li>
             ))}

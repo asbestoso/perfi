@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../main";
-import { btnCls, btnSmCls, Card, Error, inputCls, Page, useGet } from "./_shared";
+import { btnCls, btnDangerCls, btnSmCls, Card, Error, inputCls, Page, useGet } from "./_shared";
 
 function Categories({ tick, bump }: any) {
   const data = useGet(`/api/categories?limit=500&tick=${tick}`);
@@ -233,7 +233,7 @@ function DangerZone({ bump }: any) {
   return (
     <Card title="Danger zone">
       <div className="flex items-center gap-2">
-        <button onClick={clear} className="rounded-md bg-red-700 px-3 py-1.5 text-sm text-white hover:bg-red-600">
+        <button onClick={clear} className={btnDangerCls}>
           Clear all data
         </button>
         {msg && <span className="text-sm text-slate-600">{msg}</span>}

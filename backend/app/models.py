@@ -89,7 +89,7 @@ class ImportBatch(Base):
     """One uploaded file: profile used, per-row outcomes in staging_rows."""
     __tablename__ = "import_batches"
     id = Column(Integer, primary_key=True, nullable=False)
-    profile = Column(String(20), default="generic", nullable=False)
+    profile = Column(String(20), default="empower", nullable=False)
     filename = Column(String(255), default="", nullable=False)
     account_id = Column(ForeignKey("accounts.id"), nullable=True)
     created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)

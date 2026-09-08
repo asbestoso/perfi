@@ -1,10 +1,54 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+
+  --color-paper: #f3f4f2;
+
+  --color-ink-700: #2b3b49;
+  --color-ink-800: #1a2530;
+  --color-ink-900: #101820;
+
+  --color-pine-100: #d9ecdd;
+  --color-pine-200: #b4d9bd;
+  --color-pine-500: #2c8a4e;
+  --color-pine-600: #1d7a44;
+  --color-pine-700: #166534;
+  --color-pine-800: #14532b;
 }
 
 body {
-  background-color: var(--color-slate-100);
-  color: var(--color-slate-900);
+  background-color: var(--color-paper);
+  color: var(--color-ink-900);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background-color: var(--color-pine-200);
+}
+
+/* Shared ledger tables: one class upgrades every table in the app. */
+table.ledger > thead > tr > th {
+  border-bottom: 1px solid var(--color-slate-200);
+  padding: 0.5rem 0.75rem 0.5rem 0;
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--color-slate-500);
+  white-space: nowrap;
+}
+table.ledger > thead > tr > th:last-child,
+table.ledger > tbody > tr > td:last-child {
+  padding-right: 0;
+}
+table.ledger > tbody > tr > td {
+  padding: 0.55rem 0.75rem 0.55rem 0;
+  vertical-align: middle;
+}
+table.ledger > tbody > tr + tr > td {
+  border-top: 1px solid var(--color-slate-100);
+}
+table.ledger > tbody > tr:hover > td {
+  background-color: color-mix(in srgb, var(--color-pine-100) 28%, transparent);
 }

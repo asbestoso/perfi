@@ -10,7 +10,7 @@ in-memory SQLite, `store` seeds 4 categories + 2 zero-balance accounts
 ## Ground-truth fixture
 
 `backend/tests/fixtures/monarch_ground_truth.csv` (7151 rows) drives
-`test_monarch_ground_truth_end_to_end`: upload → queue → merge-all → export →
+`test_monarch_ground_truth_end_to_end` using the Empower profile: upload → queue → merge-all → export →
 re-upload-skips-everything, plus a spot-check on two mapped rows.
 
 - The fixture is **anonymized**: real account names → `Account 01…`,
