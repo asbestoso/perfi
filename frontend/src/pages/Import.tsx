@@ -17,9 +17,20 @@ function TransferSuggestions({ tick, onChange }: any) {
   async function linkAll() {
     setMsg("Linking high-confidence transfers…");
     try {
-      await Promise.all(items.filter((s: any) => s.confidence === "high").map(link));
+      let pending = items.filter((s: any) => s.confidence === "high");
+      let linked = 0;
+      for (let round = 0; pending.length > 0 && round < 20; round += 1) {
+        await Promise.all(pending.map(link));
+        linked += pending.length;
+        const refreshed = await api(`/api/transfers/suggestions?refresh=${Date.now()}`);
+        pending = (Array.isArray(refreshed) ? refreshed : [])
+          .filter((s: any) => s.confidence === "high");
+      }
+      if (pending.length > 0) {
+        throw new Error("some transfer suggestions could not be linked");
+      }
       setDismissed(true);
-      setMsg(`Linked ${items.length} high-confidence transfer${items.length === 1 ? "" : "s"}.`);
+      setMsg(`Linked ${linked} high-confidence transfer${linked === 1 ? "" : "s"}.`);
       onChange();
     } catch (e: any) { setMsg(`Failed: ${e.message}`); }
   }
