@@ -86,14 +86,28 @@ def portfolio_summary(db):
         sym = lot.symbol.upper()
         q, c = lots.get(sym, (0, 0))
         lots[sym] = (q + lot.quantity_milli, c + lot.cost_cents)
-    prices = {h.symbol.upper(): h for h in db.scalars(select(Holding)).all()}
+    holdings = {}
+    for holding in db.scalars(select(Holding)).all():
+        sym = holding.symbol.upper()
+        position = holdings.setdefault(sym, {"quantity_milli": 0, "market_cents": 0,
+                                             "accounts": {}})
+        position["quantity_milli"] += holding.quantity_milli
+        position["market_cents"] += (holding.quantity_milli * holding.price_cents) // 1000
+        account_id = holding.account_id
+        account_name = holding.account.name if holding.account is not None else "Unassigned"
+        account = position["accounts"].setdefault(
+            account_id, {"account_id": account_id, "name": account_name,
+                         "quantity_milli": 0})
+        account["quantity_milli"] += holding.quantity_milli
     positions, market_total, cost_total, gain_total = [], 0, 0, 0
-    for sym in sorted(set(lots) | set(prices)):
-        h = prices.get(sym)
+    for sym in sorted(set(lots) | set(holdings)):
         lot_qty, lot_cost = lots.get(sym, (0, 0))
-        qty = h.quantity_milli if h is not None else lot_qty
-        price = h.price_cents if h is not None else 0
-        market = (qty * price) // 1000
+        holding = holdings.get(sym)
+        holding_qty = holding["quantity_milli"] if holding else 0
+        holding_market = holding["market_cents"] if holding else 0
+        qty = holding_qty if sym in holdings else lot_qty
+        market = holding_market if sym in holdings else 0
+        price = (market * 1000) // qty if qty else 0
         has_cost = sym in lots
         gain = market - lot_cost if has_cost else None
         market_total += market
@@ -103,7 +117,8 @@ def portfolio_summary(db):
         positions.append({"symbol": sym, "quantity_milli": qty,
                           "price_cents": price, "market_cents": market,
                           "cost_cents": lot_cost if has_cost else None,
-                          "gain_cents": gain})
+                          "gain_cents": gain,
+                          "accounts": list(holding["accounts"].values()) if holding else []})
     return {"positions": positions, "market_cents": market_total,
             "cost_cents": cost_total, "gain_cents": gain_total}
 

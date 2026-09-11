@@ -15,7 +15,11 @@ def test_lots_crud(client):
     assert client.get("/api/lots").json()["total"] == 0
 
 
-def test_summary_math(client):
+def test_summary_math(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.api.routes.api.get_live_price",
+        lambda symbol: {"VTI": 25000, "BND": 8000}[symbol],
+    )
     client.post("/api/investments", json={
         "symbol": "VTI", "quantity_milli": 10000, "price_cents": 25000})
     client.post("/api/lots", json={
@@ -35,6 +39,59 @@ def test_summary_math(client):
     assert s["market_cents"] == 250000 + 40000
     assert s["cost_cents"] == 200000
     assert s["gain_cents"] == 50000
+
+
+def test_summary_aggregates_same_symbol_across_accounts(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 25000)
+    for account_id, quantity in zip(store["accts"], (10000, 5000)):
+        response = client.post("/api/investments", json={
+            "symbol": "VTI", "account_id": account_id,
+            "quantity_milli": quantity})
+        assert response.status_code == 200
+
+    summary = client.get("/api/investments/summary").json()
+
+    assert len(summary["positions"]) == 1
+    position = summary["positions"][0]
+    assert position["symbol"] == "VTI"
+    assert position["quantity_milli"] == 15000
+    assert position["price_cents"] == 25000
+    assert position["market_cents"] == 375000
+    assert [(a["name"], a["quantity_milli"]) for a in position["accounts"]] == [
+        ("Checking", 10000), ("Card", 5000)]
+    assert summary["market_cents"] == 375000
+
+
+def test_summary_fetches_one_quote_per_symbol(store, client, monkeypatch):
+    calls = []
+
+    def quote(symbol):
+        calls.append(symbol)
+        return 25000
+
+    monkeypatch.setattr("app.api.routes.api.get_live_price", quote)
+    for account_id in store["accts"]:
+        client.post("/api/investments", json={
+            "symbol": "VTI", "account_id": account_id, "quantity_milli": 1000})
+
+    calls.clear()
+    assert client.get("/api/investments/summary").status_code == 200
+    assert calls == ["VTI"]
+
+
+def test_holding_can_be_linked_to_account(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    account_id = store["acct"]
+    response = client.post("/api/investments", json={
+        "symbol": "AAPL", "account_id": account_id,
+        "quantity_milli": 1000, "price_cents": 20000})
+    assert response.status_code == 200
+    assert response.json()["account_id"] == account_id
+
+    holdings = client.get("/api/investments").json()["holdings"]
+    assert holdings[0]["account_id"] == account_id
+    assert client.post("/api/investments", json={
+        "symbol": "MSFT", "account_id": 9999}).status_code == 404
 
 
 def test_lots_csv_import(client):

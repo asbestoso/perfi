@@ -139,6 +139,7 @@ class RecurringRead(RecurringCreate):
 
 class HoldingCreate(BaseModel):
     symbol: str
+    account_id: Optional[int] = None
     quantity_milli: int = 0
     price_cents: int = 0
 

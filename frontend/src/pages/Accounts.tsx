@@ -2,7 +2,10 @@ import { useState } from "react";
 import { api } from "../main";
 import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, useGet } from "./_shared";
 
-const TYPES = ["checking", "savings", "credit", "brokerage", "loan", "other"];
+const TYPES = [
+  "checking", "savings", "credit", "brokerage", "401k",
+  "Roth", "Traditional IRA", "HSA", "529", "other"
+];
 
 function AddAccount({ onDone }: any) {
   const [name, setName] = useState("");

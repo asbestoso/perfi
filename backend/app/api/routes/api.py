@@ -12,6 +12,7 @@ from ...services import ai_provider, analytics, mcp_server, reconcile, settings_
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
 from ...services.lots_import import import_lots
+from ...services.market_data import QuoteUnavailableError, get_live_price
 from ...services.ofx_import import import_ofx
 
 router = APIRouter()
@@ -352,6 +353,7 @@ def create_recurring(payload: schemas.RecurringCreate, db=Depends(get_db)):
 def investments(db=Depends(get_db)):
     holdings = db.scalars(select(models.Holding)).all()
     return {"holdings": [{"id": h.id, "symbol": h.symbol,
+                          "account_id": h.account_id,
                           "quantity_milli": h.quantity_milli,
                           "price_cents": h.price_cents} for h in holdings],
             "total_cents": analytics.portfolio_value(db)}
@@ -359,13 +361,33 @@ def investments(db=Depends(get_db)):
 
 @router.post("/investments", response_model=schemas.HoldingRead)
 def create_holding(payload: schemas.HoldingCreate, db=Depends(get_db)):
-    h = models.Holding(**payload.model_dump())
+    if payload.account_id is not None:
+        _get_or_404(db, models.Account, payload.account_id)
+    data = payload.model_dump()
+    try:
+        data["price_cents"] = get_live_price(data["symbol"])
+    except QuoteUnavailableError as exc:
+        if not data.get("price_cents"):
+            raise HTTPException(status_code=503, detail=str(exc))
+    h = models.Holding(**data)
     db.add(h); db.commit(); db.refresh(h)
     return h
 
 
 @router.get("/investments/summary")
 def investments_summary(db=Depends(get_db)):
+    prices = {}
+    for holding in db.scalars(select(models.Holding)).all():
+        symbol = holding.symbol.upper()
+        if symbol in prices:
+            holding.price_cents = prices[symbol]
+            continue
+        try:
+            holding.price_cents = get_live_price(symbol)
+            prices[symbol] = holding.price_cents
+        except QuoteUnavailableError:
+            continue
+    db.commit()
     return analytics.portfolio_summary(db)
 
 

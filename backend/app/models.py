@@ -71,8 +71,10 @@ class Holding(Base):
     __tablename__ = "holdings"
     id = Column(Integer, primary_key=True, nullable=False)
     symbol = Column(String(20), nullable=False)
+    account_id = Column(ForeignKey("accounts.id"), nullable=True)
     quantity_milli = Column(Integer, default=0, nullable=False)  # qty * 1000
     price_cents = Column(Integer, default=0, nullable=False)
+    account = relationship("Account")
 
 
 class InvestmentLot(Base):
