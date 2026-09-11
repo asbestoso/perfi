@@ -1,5 +1,6 @@
 """Thin CRUD + domain routes under /api."""
 import datetime as dt
+import math
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -12,7 +13,7 @@ from ...services import ai_provider, analytics, mcp_server, reconcile, settings_
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
 from ...services.lots_import import import_lots
-from ...services.market_data import QuoteUnavailableError, get_live_price
+from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
 from ...services.ofx_import import import_ofx
 
 router = APIRouter()
@@ -56,7 +57,24 @@ def list_accounts(paging=Depends(pagination), db=Depends(get_db)):
     limit, offset = paging
     total = db.scalar(select(func.count()).select_from(models.Account)) or 0
     items = db.scalars(select(models.Account).limit(limit).offset(offset)).all()
-    return {"items": items, "total": total}
+    holding_totals = {}
+    for account_id, value in db.query(
+        models.Holding.account_id,
+        func.sum((models.Holding.quantity_milli * models.Holding.price_cents) / 1000),
+    ).filter(models.Holding.account_id.is_not(None)).group_by(models.Holding.account_id).all():
+        holding_totals[account_id] = round(value or 0)
+    return {
+        "items": [
+            {
+                "id": account.id,
+                "name": account.name,
+                "type": account.type,
+                "balance_cents": holding_totals.get(account.id, account.balance_cents),
+            }
+            for account in items
+        ],
+        "total": total,
+    }
 
 
 @router.post("/accounts", response_model=schemas.AccountRead)
@@ -66,6 +84,24 @@ def create_account(payload: schemas.AccountCreate, db=Depends(get_db)):
     a = models.Account(**payload.model_dump())
     db.add(a); db.commit(); db.refresh(a)
     return a
+
+
+@router.patch("/accounts/{id}", response_model=schemas.AccountRead)
+def update_account(id, payload: schemas.AccountUpdate, db=Depends(get_db)):
+    account = _get_or_404(db, models.Account, _as_int(id, "id"))
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Name is required")
+        duplicate = db.query(models.Account).filter(
+            models.Account.name == name, models.Account.id != account.id,
+        ).one_or_none()
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail="account name exists")
+        account.name = name
+    db.commit()
+    db.refresh(account)
+    return account
 
 
 @router.get("/categories", response_model=schemas.Page[schemas.CategoryRead])
@@ -352,11 +388,43 @@ def create_recurring(payload: schemas.RecurringCreate, db=Depends(get_db)):
 @router.get("/investments")
 def investments(db=Depends(get_db)):
     holdings = db.scalars(select(models.Holding)).all()
+    classifications = {
+        item.symbol.upper(): item.category
+        for item in db.scalars(select(models.InvestmentClassification)).all()
+    }
+    allocations = {}
+    for item in db.scalars(select(models.InvestmentAllocation)).all():
+        allocations.setdefault(item.symbol.upper(), {})[item.category] = item.percent_bps / 100
     return {"holdings": [{"id": h.id, "symbol": h.symbol,
+                          "name": h.name,
                           "account_id": h.account_id,
+                          "account_name": h.account.name if h.account else "Unassigned",
+                          "category": classifications.get(h.symbol.upper()),
+                          "allocations": allocations.get(h.symbol.upper(), {}),
                           "quantity_milli": h.quantity_milli,
                           "price_cents": h.price_cents} for h in holdings],
             "total_cents": analytics.portfolio_value(db)}
+
+
+@router.get("/investments/name/{symbol}")
+def investment_name(symbol: str, db=Depends(get_db)):
+    normalized = symbol.strip().upper()
+    holding = db.query(models.Holding).filter(
+        func.upper(models.Holding.symbol) == normalized,
+        models.Holding.name.isnot(None),
+    ).first()
+    if holding is not None:
+        return {"symbol": normalized, "name": holding.name}
+    try:
+        name = get_live_name(normalized)
+    except QuoteUnavailableError:
+        return {"symbol": normalized, "name": None}
+    if name:
+        db.query(models.Holding).filter(
+            func.upper(models.Holding.symbol) == normalized,
+        ).update({"name": name}, synchronize_session=False)
+        db.commit()
+    return {"symbol": normalized, "name": name}
 
 
 @router.post("/investments", response_model=schemas.HoldingRead)
@@ -369,14 +437,95 @@ def create_holding(payload: schemas.HoldingCreate, db=Depends(get_db)):
     except QuoteUnavailableError as exc:
         if not data.get("price_cents"):
             raise HTTPException(status_code=503, detail=str(exc))
-    h = models.Holding(**data)
-    db.add(h); db.commit(); db.refresh(h)
+    try:
+        data["name"] = get_live_name(data["symbol"])
+    except QuoteUnavailableError:
+        data["name"] = None
+    existing = db.query(models.Holding).filter(
+        func.upper(models.Holding.symbol) == data["symbol"].upper(),
+        models.Holding.account_id == data["account_id"],
+    ).order_by(models.Holding.id).all()
+    if existing:
+        h = existing[0]
+        h.symbol = data["symbol"].upper()
+        h.quantity_milli = data["quantity_milli"]
+        h.price_cents = data["price_cents"]
+        if data.get("name"):
+            h.name = data["name"]
+        for duplicate in existing[1:]:
+            db.delete(duplicate)
+    else:
+        h = models.Holding(**data)
+        db.add(h)
+    db.commit(); db.refresh(h)
     return h
+
+
+@router.patch("/investments/classification/{symbol}")
+def update_investment_classification(symbol: str, payload: dict, db=Depends(get_db)):
+    category = payload.get("category")
+    if category is not None:
+        if not isinstance(category, str) or not category.strip():
+            raise HTTPException(status_code=422, detail="Category must be a non-empty string")
+        category = category.strip()
+        if len(category) > 20:
+            raise HTTPException(status_code=422, detail="Category is too long")
+    normalized = symbol.strip().upper()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Symbol is required")
+    classification = db.scalar(select(models.InvestmentClassification).where(
+        models.InvestmentClassification.symbol == normalized))
+    if category is None:
+        if classification is not None:
+            db.delete(classification)
+    elif classification is None:
+        db.add(models.InvestmentClassification(symbol=normalized, category=category))
+    else:
+        classification.category = category
+    db.query(models.InvestmentAllocation).filter(
+        models.InvestmentAllocation.symbol == normalized).delete()
+    db.commit()
+    return {"symbol": normalized, "category": category}
+
+
+@router.put("/investments/allocation/{symbol}")
+def update_investment_allocation(symbol: str, payload: dict, db=Depends(get_db)):
+    normalized = symbol.strip().upper()
+    allocations = payload.get("allocations")
+    if not isinstance(allocations, dict) or not allocations:
+        raise HTTPException(status_code=422, detail="Allocations are required")
+    cleaned = {}
+    for category, percent in allocations.items():
+        if not isinstance(category, str) or not category.strip():
+            raise HTTPException(status_code=422, detail="Invalid category")
+        if percent is None or percent == "":
+            value = 0
+        else:
+            try:
+                value = float(percent)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422, detail="Percentages must be numeric")
+        if not math.isfinite(value) or value < 0 or value > 100:
+            raise HTTPException(status_code=422, detail="Percentages must be between 0 and 100")
+        if value:
+            cleaned[category.strip()] = round(value, 2)
+    if abs(sum(cleaned.values()) - 100) > 0.01:
+        raise HTTPException(status_code=422, detail="Percentages must total 100")
+    db.query(models.InvestmentAllocation).filter(
+        models.InvestmentAllocation.symbol == normalized).delete()
+    for category, value in cleaned.items():
+        db.add(models.InvestmentAllocation(symbol=normalized, category=category,
+                                           percent_bps=round(value * 100)))
+    db.query(models.InvestmentClassification).filter(
+        models.InvestmentClassification.symbol == normalized).delete()
+    db.commit()
+    return {"symbol": normalized, "allocations": cleaned}
 
 
 @router.get("/investments/summary")
 def investments_summary(db=Depends(get_db)):
     prices = {}
+    names = {}
     for holding in db.scalars(select(models.Holding)).all():
         symbol = holding.symbol.upper()
         if symbol in prices:
@@ -387,6 +536,13 @@ def investments_summary(db=Depends(get_db)):
             prices[symbol] = holding.price_cents
         except QuoteUnavailableError:
             continue
+        if not holding.name and symbol not in names:
+            try:
+                names[symbol] = get_live_name(symbol)
+            except QuoteUnavailableError:
+                names[symbol] = None
+        if not holding.name and names.get(symbol):
+            holding.name = names[symbol]
     db.commit()
     return analytics.portfolio_summary(db)
 

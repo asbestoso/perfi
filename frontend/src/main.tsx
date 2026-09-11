@@ -8,6 +8,7 @@ import Accounts from "./pages/Accounts";
 import Budgets from "./pages/Budgets";
 import Recurring from "./pages/Recurring";
 import Investments from "./pages/Investments";
+import InvestmentAnalysis from "./pages/InvestmentAnalysis";
 import Import from "./pages/Import";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
@@ -19,12 +20,12 @@ export async function api(path: string, opts?: RequestInit) {
 }
 
 const LINKS = ["", "transactions", "accounts", "budgets", "recurring",
-               "investments", "import", "reports", "settings"];
+               "investments", "investment-analysis", "import", "reports", "settings"];
 
 function links(activeCls: (a: boolean) => string) {
   return LINKS.map((l) => (
     <NavLink key={l} to={`/${l}`} end={l === ""} className={({ isActive }) => activeCls(isActive)}>
-      {l || "dashboard"}
+      {(l || "dashboard").replace("-", " ")}
     </NavLink>
   ));
 }
@@ -67,6 +68,7 @@ function Shell() {
           <Route path="/budgets" element={<Budgets />} />
           <Route path="/recurring" element={<Recurring />} />
           <Route path="/investments" element={<Investments />} />
+          <Route path="/investment-analysis" element={<InvestmentAnalysis />} />
           <Route path="/import" element={<Import />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />

@@ -23,6 +23,10 @@ class AccountRead(AccountCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AccountUpdate(BaseModel):
+    name: Optional[str] = None
+
+
 class CategoryCreate(BaseModel):
     name: str
     parent: Optional[str] = None
@@ -139,6 +143,7 @@ class RecurringRead(RecurringCreate):
 
 class HoldingCreate(BaseModel):
     symbol: str
+    name: Optional[str] = None
     account_id: Optional[int] = None
     quantity_milli: int = 0
     price_cents: int = 0

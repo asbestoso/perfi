@@ -62,6 +62,20 @@ def test_summary_aggregates_same_symbol_across_accounts(store, client, monkeypat
     assert summary["market_cents"] == 375000
 
 
+def test_accounts_balance_is_derived_from_holdings(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 25000)
+    client.post("/api/accounts", json={"name": "Cash", "balance_cents": 12500})
+    client.post("/api/investments", json={
+        "symbol": "VTI", "account_id": store["acct"], "quantity_milli": 2000})
+
+    accounts = {
+        account["name"]: account["balance_cents"]
+        for account in client.get("/api/accounts?limit=500").json()["items"]
+    }
+    assert accounts["Checking"] == 50000
+    assert accounts["Cash"] == 12500
+
+
 def test_summary_fetches_one_quote_per_symbol(store, client, monkeypatch):
     calls = []
 
@@ -92,6 +106,73 @@ def test_holding_can_be_linked_to_account(store, client, monkeypatch):
     assert holdings[0]["account_id"] == account_id
     assert client.post("/api/investments", json={
         "symbol": "MSFT", "account_id": 9999}).status_code == 404
+
+
+def test_adding_existing_account_holding_overwrites_quantity(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    account_id = store["acct"]
+    client.post("/api/investments", json={
+        "symbol": "VTI", "account_id": account_id, "quantity_milli": 1000})
+    response = client.post("/api/investments", json={
+        "symbol": "vti", "account_id": account_id, "quantity_milli": 2500})
+
+    assert response.status_code == 200
+    holdings = client.get("/api/investments").json()["holdings"]
+    matching = [h for h in holdings if h["symbol"] == "VTI" and h["account_id"] == account_id]
+    assert len(matching) == 1
+    assert matching[0]["quantity_milli"] == 2500
+
+
+def test_symbol_classification_applies_to_all_accounts(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    for account_id in store["accts"]:
+        client.post("/api/investments", json={
+            "symbol": "VXUS", "account_id": account_id, "quantity_milli": 1000
+        })
+
+    response = client.patch("/api/investments/classification/vxus",
+                            json={"category": "Intl"})
+    assert response.status_code == 200
+    assert response.json()["category"] == "Intl"
+    assert {h["category"] for h in client.get("/api/investments").json()["holdings"]} == {"Intl"}
+    assert client.patch("/api/investments/classification/VXUS",
+                        json={"category": "Cash"}).status_code == 200
+    assert client.patch("/api/investments/classification/VXUS",
+                        json={"category": "Crypto"}).status_code == 200
+    assert client.patch("/api/investments/classification/VXUS",
+                        json={"category": ""}).status_code == 422
+
+
+def test_symbol_mixed_allocations_total_one_hundred(client):
+    response = client.put("/api/investments/allocation/VTI", json={
+        "allocations": {"US": 70, "Intl": 30, "Bonds": ""}})
+    assert response.status_code == 200
+    assert response.json()["allocations"] == {"US": 70, "Intl": 30}
+    assert client.put("/api/investments/allocation/VTI", json={
+        "allocations": {"US": 70, "Intl": 20}}).status_code == 422
+    assert client.put("/api/investments/allocation/VTI", json={
+        "allocations": {"US": 70, "Intl": 30, "Bonds": "nan"}}).status_code == 422
+
+
+def test_missing_holding_name_is_loaded_on_demand(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    monkeypatch.setattr("app.api.routes.api.get_live_name", lambda symbol: None)
+    client.post("/api/investments", json={
+        "symbol": "AMZN", "account_id": store["acct"], "quantity_milli": 1000})
+
+    assert client.get("/api/investments").json()["holdings"][0]["name"] is None
+    monkeypatch.setattr("app.api.routes.api.get_live_name", lambda symbol: "Amazon.com, Inc.")
+    response = client.get("/api/investments/name/AMZN")
+    assert response.json()["name"] == "Amazon.com, Inc."
+    assert client.get("/api/investments").json()["holdings"][0]["name"] == "Amazon.com, Inc."
+
+
+def test_btc_uses_bitcoin_usd_yahoo_symbol(client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    client.post("/api/investments", json={"symbol": "BTC", "quantity_milli": 1000})
+    from app.services.market_data import yahoo_symbol
+    assert yahoo_symbol("BTC") == "BTC-USD"
+    assert yahoo_symbol("AAPL") == "AAPL"
 
 
 def test_lots_csv_import(client):

@@ -50,9 +50,23 @@ function AddAccount({ onDone }: any) {
 
 export default function Accounts() {
   const [tick, setTick] = useState(0);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [msg, setMsg] = useState("");
   const data = useGet(`/api/accounts?limit=500&tick=${tick}`);
   const items = data?.items || [];
   const total = items.reduce((s: number, a: any) => s + Number(a.balance_cents || 0), 0);
+  async function saveName(id: number) {
+    if (!editingName.trim()) { setMsg("Name is required."); return; }
+    try {
+      await api(`/api/accounts/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editingName.trim() }),
+      });
+      setEditingId(null); setEditingName(""); setMsg("");
+      setTick((t) => t + 1);
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
   return (
     <Page title="Accounts">
       <Card title="Add account">
@@ -72,7 +86,18 @@ export default function Accounts() {
             <tbody>
               {items.map((a: any) => (
                 <tr key={a.id}>
-                  <td className="font-medium">{a.name}</td>
+                  <td className="font-medium">
+                    {editingId === a.id ? (
+                      <form onSubmit={(e) => { e.preventDefault(); saveName(a.id); }} className="flex gap-1">
+                        <input autoFocus value={editingName} onChange={(e) => setEditingName(e.target.value)}
+                          className={`${inputCls} w-48 py-1`} />
+                        <button className={btnCls}>Save</button>
+                      </form>
+                    ) : (
+                      <button onClick={() => { setEditingId(a.id); setEditingName(a.name); setMsg(""); }}
+                        className="text-left hover:text-pine-700 hover:underline">{a.name}</button>
+                    )}
+                  </td>
                   <td className="text-slate-500">{a.type}</td>
                   <td className="text-right"><Amt cents={a.balance_cents} /></td>
                 </tr>
@@ -80,6 +105,7 @@ export default function Accounts() {
             </tbody>
           </table>
         )}
+        {msg && <p className="mt-3 text-sm text-slate-600">{msg}</p>}
       </Card>
     </Page>
   );

@@ -89,8 +89,10 @@ def portfolio_summary(db):
     holdings = {}
     for holding in db.scalars(select(Holding)).all():
         sym = holding.symbol.upper()
-        position = holdings.setdefault(sym, {"quantity_milli": 0, "market_cents": 0,
+        position = holdings.setdefault(sym, {"name": holding.name, "quantity_milli": 0, "market_cents": 0,
                                              "accounts": {}})
+        if not position["name"] and holding.name:
+            position["name"] = holding.name
         position["quantity_milli"] += holding.quantity_milli
         position["market_cents"] += (holding.quantity_milli * holding.price_cents) // 1000
         account_id = holding.account_id
@@ -114,7 +116,8 @@ def portfolio_summary(db):
         if has_cost:
             cost_total += lot_cost
             gain_total += gain
-        positions.append({"symbol": sym, "quantity_milli": qty,
+        positions.append({"symbol": sym, "name": holding["name"] if holding else None,
+                          "quantity_milli": qty,
                           "price_cents": price, "market_cents": market,
                           "cost_cents": lot_cost if has_cost else None,
                           "gain_cents": gain,

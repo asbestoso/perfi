@@ -43,6 +43,16 @@ def test_duplicate_account_name_is_409(client):
     assert client.post("/api/accounts", json={"name": "Checking"}).status_code == 409
 
 
+def test_account_name_can_be_updated(client):
+    account = client.post("/api/accounts", json={"name": "Checking"}).json()
+    response = client.patch(f"/api/accounts/{account['id']}", json={"name": "Main checking"})
+    assert response.status_code == 200
+    assert response.json()["name"] == "Main checking"
+    assert client.patch(f"/api/accounts/{account['id']}", json={"name": " "}).status_code == 422
+    other = client.post("/api/accounts", json={"name": "Savings"}).json()
+    assert client.patch(f"/api/accounts/{other['id']}", json={"name": "Main checking"}).status_code == 409
+
+
 def test_list_envelope_and_paging(client):
     _make_accounts(client, 3)
     body = client.get("/api/accounts").json()

@@ -71,10 +71,26 @@ class Holding(Base):
     __tablename__ = "holdings"
     id = Column(Integer, primary_key=True, nullable=False)
     symbol = Column(String(20), nullable=False)
+    name = Column(String(200), nullable=True)
     account_id = Column(ForeignKey("accounts.id"), nullable=True)
     quantity_milli = Column(Integer, default=0, nullable=False)  # qty * 1000
     price_cents = Column(Integer, default=0, nullable=False)
     account = relationship("Account")
+
+
+class InvestmentClassification(Base):
+    __tablename__ = "investment_classifications"
+    id = Column(Integer, primary_key=True, nullable=False)
+    symbol = Column(String(20), nullable=False, unique=True)
+    category = Column(String(20), nullable=False)
+
+
+class InvestmentAllocation(Base):
+    __tablename__ = "investment_allocations"
+    id = Column(Integer, primary_key=True, nullable=False)
+    symbol = Column(String(20), nullable=False)
+    category = Column(String(20), nullable=False)
+    percent_bps = Column(Integer, nullable=False)
 
 
 class InvestmentLot(Base):
