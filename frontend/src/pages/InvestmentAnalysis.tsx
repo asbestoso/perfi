@@ -220,7 +220,7 @@ export default function InvestmentAnalysis() {
   }
 
   return (
-    <Page title="Investment analysis" sub="Review allocation by holding, account, and category.">
+    <Page title="Portfolio analysis" sub="Review allocation by holding, account, and category.">
       <Card title="Allocation by category"
         hint="Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts.">
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,1fr)]">

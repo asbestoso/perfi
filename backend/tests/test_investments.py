@@ -15,6 +15,44 @@ def test_lots_crud(client):
     assert client.get("/api/lots").json()["total"] == 0
 
 
+def test_orders_create_fifo_buy_and_sell(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 12000)
+    buy = client.post("/api/investment-orders", json={
+        "account_id": store["acct"], "symbol": "VTI", "side": "buy",
+        "quantity_milli": 10000, "price_cents": 10000,
+        "executed_at": "2026-01-01"})
+    assert buy.status_code == 200
+    sell = client.post("/api/investment-orders", json={
+        "account_id": store["acct"], "symbol": "VTI", "side": "sell",
+        "quantity_milli": 4000, "price_cents": 12000,
+        "executed_at": "2026-02-01"})
+    assert sell.status_code == 200
+    assert sell.json()["cost_basis_cents"] == 40000
+    assert sell.json()["gain_cents"] == 8000
+    assert client.post("/api/investment-orders", json={
+        "account_id": store["acct"], "symbol": "VTI", "side": "sell",
+        "quantity_milli": 7000, "price_cents": 12000,
+        "executed_at": "2026-02-01"}).status_code == 422
+    response = client.get("/api/investment-orders/analysis")
+    assert response.status_code == 200
+    sell_row = next(row for row in response.json()["items"] if row["side"] == "sell")
+    assert sell_row["cost_basis_cents"] == 40000
+    assert sell_row["gain_cents"] == 8000
+    assert sell_row["percent"] == 20
+    buy_row = next(row for row in response.json()["items"] if row["side"] == "buy")
+    assert buy_row["annualized_percent"] is not None
+
+
+def test_trade_analysis_hides_recent_annualized_return(store, client):
+    response = client.post("/api/investment-orders", json={
+        "account_id": store["acct"], "symbol": "VTI", "side": "buy",
+        "quantity_milli": 1000, "price_cents": 10000,
+        "executed_at": "2026-09-01"})
+    assert response.status_code == 200
+    analysis = client.get("/api/investment-orders/analysis").json()
+    assert analysis["items"][0]["annualized_percent"] is None
+
+
 def test_summary_math(client, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.api.get_live_price",

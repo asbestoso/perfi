@@ -2,7 +2,9 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+# Local database files and restore snapshots must never be committed.
 data/*.db*
+data/*.restore-snapshot
 data/.ai_key
 backend/data/
 node_modules/

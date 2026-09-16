@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, NavLink, Route, Routes } from "react-router-dom";
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import "./index.css";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
@@ -9,6 +9,7 @@ import Budgets from "./pages/Budgets";
 import Recurring from "./pages/Recurring";
 import Investments from "./pages/Investments";
 import InvestmentAnalysis from "./pages/InvestmentAnalysis";
+import TradeAnalysis from "./pages/TradeAnalysis";
 import Import from "./pages/Import";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
@@ -20,7 +21,7 @@ export async function api(path: string, opts?: RequestInit) {
 }
 
 const LINKS = ["", "transactions", "accounts", "budgets", "recurring",
-               "investments", "investment-analysis", "import", "reports", "settings"];
+               "investments", "portfolio-analysis", "trade-analysis", "import", "reports", "settings"];
 
 function links(activeCls: (a: boolean) => string) {
   return LINKS.map((l) => (
@@ -68,7 +69,9 @@ function Shell() {
           <Route path="/budgets" element={<Budgets />} />
           <Route path="/recurring" element={<Recurring />} />
           <Route path="/investments" element={<Investments />} />
-          <Route path="/investment-analysis" element={<InvestmentAnalysis />} />
+          <Route path="/portfolio-analysis" element={<InvestmentAnalysis />} />
+          <Route path="/investment-analysis" element={<Navigate to="/portfolio-analysis" replace />} />
+          <Route path="/trade-analysis" element={<TradeAnalysis />} />
           <Route path="/import" element={<Import />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />

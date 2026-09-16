@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../main";
-import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, useGet } from "./_shared";
+import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, today, useGet } from "./_shared";
 
 function shares(milli: any) {
   return (Number(milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -110,6 +110,79 @@ function AddHolding({ onDone, accounts, holdings }: any) {
   );
 }
 
+function AddOrder({ onDone, accounts }: any) {
+  const [symbol, setSymbol] = useState("");
+  const [accountId, setAccountId] = useState(
+    () => localStorage.getItem("perfi.lastHoldingAccountId") || ""
+  );
+  const [side, setSide] = useState("buy");
+  const [qty, setQty] = useState("");
+  const [price, setPrice] = useState("");
+  const [fees, setFees] = useState("0");
+  const [executedAt, setExecutedAt] = useState(today());
+  const [msg, setMsg] = useState("");
+  async function submit(e: any) {
+    e.preventDefault();
+    if (!symbol.trim() || !accountId || !qty || !price || !executedAt) {
+      setMsg("Symbol, account, quantity, price, and date are required."); return;
+    }
+    try {
+      await api("/api/investment-orders", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: symbol.trim().toUpperCase(), account_id: Number(accountId), side,
+          quantity_milli: Math.round(Number(qty) * 1000),
+          price_cents: Math.round(Number(price) * 100),
+          fees_cents: Math.round(Number(fees || 0) * 100),
+          executed_at: executedAt,
+        }),
+      });
+      setSymbol(""); setQty(""); setPrice(""); setFees("0"); setMsg("");
+      onDone();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-end gap-4 rounded-lg bg-slate-50 p-4">
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Symbol
+        <input value={symbol} onChange={(e) => setSymbol(e.target.value)}
+          placeholder="VTI" className={`${inputCls} w-24`} />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Action
+        <select value={side} onChange={(e) => setSide(e.target.value)} className={inputCls}>
+          <option value="buy">Buy</option><option value="sell">Sell</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Shares
+        <input value={qty} onChange={(e) => setQty(e.target.value)} inputMode="decimal"
+          placeholder="10" className={`${inputCls} w-24`} />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Price
+        <input value={price} onChange={(e) => setPrice(e.target.value)} inputMode="decimal"
+          placeholder="100.00" className={`${inputCls} w-28`} />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Fees
+        <input value={fees} onChange={(e) => setFees(e.target.value)} inputMode="decimal"
+          className={`${inputCls} w-24`} />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Date
+        <input type="date" value={executedAt} onChange={(e) => setExecutedAt(e.target.value)}
+          className={inputCls} />
+      </label>
+      <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs font-medium text-slate-600">Account
+        <select value={accountId} onChange={(e) => {
+          setAccountId(e.target.value);
+          localStorage.setItem("perfi.lastHoldingAccountId", e.target.value);
+        }} className={inputCls} required>
+          <option value="">Select account</option>
+          {(accounts?.items || []).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+      </label>
+      <button className={btnCls}>Add order</button>
+      {msg && <span className="basis-full text-sm text-slate-600">{msg}</span>}
+    </form>
+  );
+}
+
 export default function Investments() {
   const [tick, setTick] = useState(0);
   const [expandedSymbol, setExpandedSymbol] = useState("");
@@ -132,6 +205,9 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
+      <Card title="Add order" hint="Orders create cost-basis lots and sell using FIFO. Fees default to $0.00 and date defaults to today.">
+        <AddOrder onDone={bump} accounts={accounts} />
+      </Card>
       <Card title="Add holding">
         <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
       </Card>

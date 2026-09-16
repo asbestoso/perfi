@@ -156,6 +156,7 @@ class HoldingRead(HoldingCreate):
 
 class LotCreate(BaseModel):
     symbol: str
+    account_id: Optional[int] = None
     quantity_milli: int = 0
     cost_cents: int = 0
     acquired: Optional[dt.date] = None
@@ -168,9 +169,28 @@ class LotRead(LotCreate):
 
 class LotUpdate(BaseModel):
     symbol: Optional[str] = None
+    account_id: Optional[int] = None
     quantity_milli: Optional[int] = None
     cost_cents: Optional[int] = None
     acquired: Optional[dt.date] = None
+
+
+class OrderCreate(BaseModel):
+    account_id: int
+    symbol: str
+    side: str
+    quantity_milli: int
+    price_cents: int
+    fees_cents: int = 0
+    executed_at: dt.date
+
+
+class OrderRead(OrderCreate):
+    id: int
+    proceeds_cents: Optional[int] = None
+    cost_basis_cents: Optional[int] = None
+    gain_cents: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SavedReportCreate(BaseModel):

@@ -1,5 +1,6 @@
 """Thin CRUD + domain routes under /api."""
 import datetime as dt
+import calendar
 import math
 import re
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
@@ -584,6 +585,133 @@ def delete_lot(id, db=Depends(get_db)):
     db.delete(lot)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/investment-orders", response_model=schemas.Page[schemas.OrderRead])
+def list_investment_orders(paging=Depends(pagination), db=Depends(get_db)):
+    limit, offset = paging
+    total = db.scalar(select(func.count()).select_from(models.InvestmentOrder)) or 0
+    items = db.scalars(select(models.InvestmentOrder).order_by(
+        models.InvestmentOrder.executed_at.desc(),
+        models.InvestmentOrder.id.desc()).limit(limit).offset(offset)).all()
+    return {"items": items, "total": total}
+
+
+@router.get("/investment-orders/analysis")
+def investment_orders_analysis(db=Depends(get_db)):
+    orders = db.scalars(select(models.InvestmentOrder).order_by(
+        models.InvestmentOrder.executed_at.desc(),
+        models.InvestmentOrder.id.desc())).all()
+    prices = {}
+    items = []
+    today = dt.date.today()
+    target_month = today.month - 4
+    target_year = today.year
+    if target_month <= 0:
+        target_month += 12
+        target_year -= 1
+    four_months_ago = dt.date(
+        target_year, target_month,
+        min(today.day, calendar.monthrange(target_year, target_month)[1]),
+    )
+    for order in orders:
+        symbol = order.symbol.upper()
+        if symbol not in prices:
+            try:
+                prices[symbol] = get_live_price(symbol)
+            except QuoteUnavailableError:
+                prices[symbol] = order.price_cents
+        cost_basis = order.cost_basis_cents or 0
+        if order.side == "buy":
+            market_value = (order.quantity_milli * prices[symbol]) // 1000
+            gain = market_value - cost_basis
+        else:
+            market_value = order.proceeds_cents or 0
+            gain = order.gain_cents or 0
+        percent = gain / cost_basis * 100 if cost_basis else 0
+        days = max((today - order.executed_at).days, 1)
+        annualized = ((1 + gain / cost_basis) ** (365 / days) - 1) * 100 \
+            if order.executed_at <= four_months_ago and cost_basis \
+            and 1 + gain / cost_basis > 0 else None
+        items.append({
+            "id": order.id, "account_name": order.account.name,
+            "symbol": symbol, "side": order.side,
+            "quantity_milli": order.quantity_milli,
+            "executed_at": order.executed_at,
+            "market_value_cents": market_value,
+            "cost_basis_cents": cost_basis,
+            "gain_cents": gain,
+            "percent": percent,
+            "annualized_percent": annualized,
+        })
+    return {"items": items, "total": len(items)}
+
+
+@router.post("/investment-orders", response_model=schemas.OrderRead)
+def create_investment_order(payload: schemas.OrderCreate, db=Depends(get_db)):
+    if payload.side not in ("buy", "sell"):
+        raise HTTPException(status_code=422, detail="Side must be buy or sell")
+    if payload.quantity_milli <= 0 or payload.price_cents <= 0 or payload.fees_cents < 0:
+        raise HTTPException(status_code=422, detail="Quantity, price, and fees are invalid")
+    _get_or_404(db, models.Account, payload.account_id)
+    symbol = payload.symbol.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="Symbol is required")
+    quantity = payload.quantity_milli
+    proceeds = (quantity * payload.price_cents) // 1000 - payload.fees_cents
+    cost_basis = None
+    gain = None
+    if payload.side == "buy":
+        cost_basis = (quantity * payload.price_cents) // 1000 + payload.fees_cents
+        db.add(models.InvestmentLot(symbol=symbol, account_id=payload.account_id,
+                                    quantity_milli=quantity, cost_cents=cost_basis,
+                                    acquired=payload.executed_at))
+    else:
+        remaining = quantity
+        cost_basis = 0
+        lots = db.scalars(select(models.InvestmentLot).where(
+            models.InvestmentLot.account_id == payload.account_id,
+            func.upper(models.InvestmentLot.symbol) == symbol,
+            models.InvestmentLot.quantity_milli > 0,
+        ).order_by(models.InvestmentLot.acquired, models.InvestmentLot.id)).all()
+        for lot in lots:
+            if not remaining:
+                break
+            consumed = min(remaining, lot.quantity_milli)
+            lot_cost = (lot.cost_cents * consumed) // lot.quantity_milli
+            lot.quantity_milli -= consumed
+            lot.cost_cents -= lot_cost
+            cost_basis += lot_cost
+            remaining -= consumed
+        if remaining:
+            raise HTTPException(status_code=422, detail="Sell exceeds available FIFO shares")
+        gain = proceeds - cost_basis
+    order = models.InvestmentOrder(
+        account_id=payload.account_id, symbol=symbol, side=payload.side,
+        quantity_milli=quantity, price_cents=payload.price_cents,
+        fees_cents=payload.fees_cents, executed_at=payload.executed_at,
+        proceeds_cents=proceeds if payload.side == "sell" else None,
+        cost_basis_cents=cost_basis, gain_cents=gain,
+    )
+    holding = db.query(models.Holding).filter(
+        func.upper(models.Holding.symbol) == symbol,
+        models.Holding.account_id == payload.account_id).order_by(models.Holding.id).first()
+    delta = quantity if payload.side == "buy" else -quantity
+    if holding is None:
+        if delta < 0:
+            raise HTTPException(status_code=422, detail="No holding exists for this sell")
+        holding = models.Holding(symbol=symbol, account_id=payload.account_id,
+                                 quantity_milli=delta, price_cents=payload.price_cents)
+        db.add(holding)
+    else:
+        if holding.quantity_milli + delta < 0:
+            raise HTTPException(status_code=422, detail="Sell exceeds holding shares")
+        holding.quantity_milli += delta
+        holding.price_cents = payload.price_cents
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+    return order
 
 
 @router.post("/transfers/link")
