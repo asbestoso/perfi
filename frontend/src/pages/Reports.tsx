@@ -5,8 +5,8 @@ import { Amt, btnCls, btnSmCls, Card, chart, dollars, Error, inputCls, Page, Sta
 
 const REPORT_TYPES = ["spending", "trends", "net_worth", "category_trends"];
 
-function MonthReport({ month }: any) {
-  const data = useGet(`/api/reports/${month}`);
+function MonthReport({ month, domain }: any) {
+  const data = useGet(`/api/reports/${month}${domain ? `?domain=${domain}` : ""}`);
   const categories = useGet("/api/categories?limit=500");
   const catById = Object.fromEntries(((categories as any)?.items || []).map((c: any) => [c.id, c.name]));
   if (!data || data.error) return <Error data={data} />;
@@ -57,8 +57,8 @@ function MonthReport({ month }: any) {
   );
 }
 
-function Trends() {
-  const data = useGet("/api/reports-trends?months=12");
+function Trends({ domain }: any) {
+  const data = useGet(`/api/reports-trends?months=12${domain ? `&domain=${domain}` : ""}`);
   if (!data || data.error) return <Error data={data} />;
   const rows = (Array.isArray(data) ? data : []).map((m: any) => ({
     ...m, income: m.income_cents / 100, expense: m.expense_cents / 100, net: m.net_cents / 100,
@@ -123,14 +123,18 @@ function SavedReports() {
   const [name, setName] = useState("");
   const [type, setType] = useState("spending");
   const [month, setMonth] = useState(thisMonth());
+  const [domain, setDomain] = useState("");
 
   async function save(e: any) {
     e.preventDefault();
     if (!name.trim()) { setMsg("Name is required."); return; }
     try {
+      const params: any = {};
+      if (type === "spending") params.month = month;
+      if (domain) params.domain = domain;
       await api("/api/saved-reports", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), type, params: type === "spending" ? { month } : {} }),
+        body: JSON.stringify({ name: name.trim(), type, params }),
       });
       setName(""); setMsg("");
       setTick((t) => t + 1);
@@ -165,6 +169,16 @@ function SavedReports() {
               className={`${inputCls} ml-1`} />
           </label>
         )}
+        {type !== "net_worth" && (
+          <label className="text-sm">Group
+            <select value={domain} onChange={(e) => setDomain(e.target.value)} className={`${inputCls} ml-1`}>
+              <option value="">Spending</option>
+              <option value="investing">Investing</option>
+              <option value="mixed">Mixed</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+        )}
         <button className={btnCls}>Save report</button>
         {msg && <span className="text-sm text-slate-600">{msg}</span>}
       </form>
@@ -191,14 +205,25 @@ function SavedReports() {
 export default function Reports() {
   const [month, setMonth] = useState(thisMonth());
   const [tick, setTick] = useState(0);
+  const [domain, setDomain] = useState("");
   return (
     <Page title="Reports">
       <Card title="Month">
-        <input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)}
-          className={inputCls} />
+        <div className="flex flex-wrap items-end gap-2">
+          <input type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)}
+            className={inputCls} />
+          <label className="text-sm">Group
+            <select value={domain} onChange={(e) => setDomain(e.target.value)} className={`${inputCls} ml-1`}>
+              <option value="">Spending</option>
+              <option value="investing">Investing</option>
+              <option value="mixed">Mixed</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+        </div>
       </Card>
-      <MonthReport month={month} />
-      <Trends />
+      <MonthReport month={month} domain={domain} />
+      <Trends domain={domain} />
       <NetWorth tick={tick} bump={() => setTick((t) => t + 1)} />
       <SavedReports />
     </Page>

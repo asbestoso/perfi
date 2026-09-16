@@ -100,7 +100,7 @@ def test_stage_folds_note_into_exact_match(store, client):
     body = b"date,merchant,amount,note\n2026-01-05,Whole Foods,-12.34,weekly shop\n"
     assert _upload(client, acct, body).json() == {
         "batch_id": 1, "staged": 1, "skipped": 0, "accounts": ["Checking"],
-        "new_categories": []}
+        "new_categories": [], "file_kind": "mixed", "by_kind": {"spend": 1}}
     txns = client.get("/api/transactions").json()["items"]
     assert txns[0]["note"] == "weekly shop"
 

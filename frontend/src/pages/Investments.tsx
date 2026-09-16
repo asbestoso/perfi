@@ -120,6 +120,7 @@ function AddOrder({ onDone, accounts }: any) {
   const [price, setPrice] = useState("");
   const [fees, setFees] = useState("0");
   const [executedAt, setExecutedAt] = useState(today());
+  const [linkedTxn, setLinkedTxn] = useState("");
   const [msg, setMsg] = useState("");
   async function submit(e: any) {
     e.preventDefault();
@@ -135,9 +136,10 @@ function AddOrder({ onDone, accounts }: any) {
           price_cents: Math.round(Number(price) * 100),
           fees_cents: Math.round(Number(fees || 0) * 100),
           executed_at: executedAt,
+          ...(linkedTxn ? { linked_transaction_id: Number(linkedTxn) } : {}),
         }),
       });
-      setSymbol(""); setQty(""); setPrice(""); setFees("0"); setMsg("");
+      setSymbol(""); setQty(""); setPrice(""); setFees("0"); setLinkedTxn(""); setMsg("");
       onDone();
     } catch (e: any) { setMsg(`Failed: ${e.message}`); }
   }
@@ -167,6 +169,11 @@ function AddOrder({ onDone, accounts }: any) {
       <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Date
         <input type="date" value={executedAt} onChange={(e) => setExecutedAt(e.target.value)}
           className={inputCls} />
+      </label>
+      <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Cash txn #
+        <input value={linkedTxn} onChange={(e) => setLinkedTxn(e.target.value)} inputMode="numeric"
+          placeholder="optional" title="Link the cash leg (e.g. the checking transfer). It leaves spending totals."
+          className={`${inputCls} w-24`} />
       </label>
       <label className="flex min-w-52 flex-1 flex-col gap-1 text-xs font-medium text-slate-600">Account
         <select value={accountId} onChange={(e) => {
@@ -205,7 +212,7 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
-      <Card title="Add order" hint="Orders create cost-basis lots and sell using FIFO. Fees default to $0.00 and date defaults to today.">
+      <Card title="Add order" hint="Orders create cost-basis lots and sell using FIFO. Fees default to $0.00 and date defaults to today. Link the cash txn # to keep its leg out of spending.">
         <AddOrder onDone={bump} accounts={accounts} />
       </Card>
       <Card title="Add holding">

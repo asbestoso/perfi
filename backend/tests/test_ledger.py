@@ -60,6 +60,27 @@ def test_transaction_rejects_unknown_account_and_category(store, client):
                         json={"category_id": 9999}).status_code == 404
 
 
+def test_transaction_domain_filter_separates_investment_cash(store, client):
+    investing = client.post("/api/accounts", json={
+        "name": "Robinhood", "type": "brokerage", "domain": "investing",
+    }).json()["id"]
+    client.post("/api/transactions", json={
+        "account_id": store["acct"], "amount_cents": -1000,
+        "merchant": "Groceries", "date": "2026-01-05",
+        "transaction_kind": "expense",
+    })
+    client.post("/api/transactions", json={
+        "account_id": investing, "amount_cents": -50000,
+        "merchant": "Contribution", "date": "2026-01-05",
+        "transaction_kind": "investment_contribution",
+    })
+    spending = client.get("/api/transactions?domain=spending").json()
+    investing_rows = client.get("/api/transactions?domain=investing").json()
+    assert spending["total"] == 1
+    assert investing_rows["total"] == 1
+    assert investing_rows["items"][0]["transaction_kind"] == "investment_contribution"
+
+
 def test_category_update_delete_moves_children(store, client):
     a0 = store["accts"][0]
     g = store["cats"]["Groceries"]
@@ -99,7 +120,8 @@ def test_rules_crud_and_import_application(store, client):
     assert client.post(f"/api/import/csv?account_id={a0}",
                        files={"file": ("m.csv", raw, "text/csv")}).json() == {
                            "batch_id": 1, "staged": 1, "skipped": 0,
-                           "accounts": ["Checking"], "new_categories": []}
+                           "accounts": ["Checking"], "new_categories": [],
+                           "file_kind": "mixed", "by_kind": {"spend": 1}}
     assert client.post("/api/import/batches/1/merge-all").json() == {"ok": True, "merged": 1}
     body = client.get("/api/transactions?q=farmers").json()
     assert body["total"] == 1

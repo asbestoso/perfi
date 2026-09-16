@@ -18,6 +18,14 @@ function Filters({ f, set, accounts, categories }: any) {
           {(accounts?.items || []).map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
       </label>
+      <label className="text-sm">Group
+        <select value={f.domain} onChange={setK("domain")} className={`${inputCls} ml-1`}>
+          <option value="">All</option>
+          <option value="spending">Spending</option>
+          <option value="investing">Investing</option>
+          <option value="mixed">Mixed</option>
+        </select>
+      </label>
       <label className="text-sm">Category
         <select value={f.category_id} onChange={setK("category_id")} className={`${inputCls} ml-1`}>
           <option value="">All</option>
@@ -76,11 +84,11 @@ function TxnTable({ data, acctName, onRecat, onDelete, categories }: any) {
 }
 
 export default function Transactions() {
-  const [f, setF] = useState({ q: "", account_id: "", category_id: "", date_from: "", date_to: "", offset: 0 });
+  const [f, setF] = useState({ q: "", account_id: "", domain: "", category_id: "", date_from: "", date_to: "", offset: 0 });
   const [tick, setTick] = useState(0);
   const bump = () => setTick((t) => t + 1);
   const qs = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(f.offset), tick: String(tick) });
-  for (const k of ["q", "account_id", "category_id", "date_from", "date_to"]) {
+  for (const k of ["q", "account_id", "domain", "category_id", "date_from", "date_to"]) {
     if ((f as any)[k]) qs.set(k, (f as any)[k]);
   }
   const data = useGet(`/api/transactions?${qs}`);

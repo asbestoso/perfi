@@ -23,11 +23,47 @@ export async function api(path: string, opts?: RequestInit) {
 const LINKS = ["", "transactions", "accounts", "budgets", "recurring",
                "investments", "portfolio-analysis", "trade-analysis", "import", "reports", "settings"];
 
-function links(activeCls: (a: boolean) => string) {
-  return LINKS.map((l) => (
+const LABELS: Record<string, string> = {
+  "": "dashboard",
+  transactions: "spending",
+  accounts: "accounts",
+  budgets: "budgets",
+  recurring: "recurring",
+  investments: "portfolio",
+  "portfolio-analysis": "allocation",
+  "trade-analysis": "trades",
+  import: "import",
+  reports: "reports",
+  settings: "settings",
+};
+
+const SECTIONS: { title: string; links: string[] }[] = [
+  { title: "Overview", links: [""] },
+  { title: "Spending", links: ["transactions", "budgets", "recurring"] },
+  { title: "Investing", links: ["investments", "portfolio-analysis", "trade-analysis"] },
+  { title: "Manage", links: ["accounts", "import", "reports", "settings"] },
+];
+
+function linkItem(l: string, activeCls: (a: boolean) => string) {
+  return (
     <NavLink key={l} to={`/${l}`} end={l === ""} className={({ isActive }) => activeCls(isActive)}>
-      {(l || "dashboard").replace("-", " ")}
+      {LABELS[l].replace("-", " ")}
     </NavLink>
+  );
+}
+
+function links(activeCls: (a: boolean) => string) {
+  return LINKS.map((l) => linkItem(l, activeCls));
+}
+
+function sectionedLinks(activeCls: (a: boolean) => string) {
+  return SECTIONS.map((s) => (
+    <div key={s.title} className="pt-3 first:pt-0">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        {s.title}
+      </div>
+      <div className="space-y-0.5">{s.links.map((l) => linkItem(l, activeCls))}</div>
+    </div>
   ));
 }
 
@@ -50,7 +86,7 @@ function Shell() {
           </span>
           <span className="text-lg font-bold tracking-tight text-white">perfi</span>
         </div>
-        <nav className="flex-1 space-y-0.5 px-3">{links(sideCls)}</nav>
+        <nav className="flex-1 space-y-0.5 px-3">{sectionedLinks(sideCls)}</nav>
         <div className="px-5 py-4 text-xs text-slate-500">local-first finance</div>
       </aside>
       <div className="min-w-0 flex-1">

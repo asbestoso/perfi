@@ -16,8 +16,28 @@ from ...services.fingerprint import compute_fingerprint
 from ...services.lots_import import import_lots
 from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
 from ...services.ofx_import import import_ofx
+from ...services.profiles import detect_source, header_signature, propose_mapping, unmapped_columns
 
 router = APIRouter()
+
+ACCOUNT_DOMAINS = ("spending", "investing", "mixed")
+TRANSACTION_KINDS = ("expense", "income", "investment_contribution",
+                     "investment_distribution")
+
+
+def _check_domain(domain):
+    if domain not in ACCOUNT_DOMAINS:
+        raise HTTPException(status_code=422, detail="Invalid account domain")
+
+
+def _check_kind(kind):
+    if kind not in TRANSACTION_KINDS:
+        raise HTTPException(status_code=422, detail="Invalid transaction kind")
+
+
+def _check_domain_param(domain):
+    if domain != "all":
+        _check_domain(domain)
 
 
 def _get_or_404(db, model, id):
@@ -70,6 +90,7 @@ def list_accounts(paging=Depends(pagination), db=Depends(get_db)):
                 "id": account.id,
                 "name": account.name,
                 "type": account.type,
+                "domain": account.domain,
                 "balance_cents": holding_totals.get(account.id, account.balance_cents),
             }
             for account in items
@@ -82,6 +103,7 @@ def list_accounts(paging=Depends(pagination), db=Depends(get_db)):
 def create_account(payload: schemas.AccountCreate, db=Depends(get_db)):
     if db.query(models.Account).filter_by(name=payload.name).one_or_none() is not None:
         raise HTTPException(status_code=409, detail="account name exists")
+    _check_domain(payload.domain)
     a = models.Account(**payload.model_dump())
     db.add(a); db.commit(); db.refresh(a)
     return a
@@ -100,6 +122,11 @@ def update_account(id, payload: schemas.AccountUpdate, db=Depends(get_db)):
         if duplicate is not None:
             raise HTTPException(status_code=409, detail="account name exists")
         account.name = name
+    if payload.type is not None:
+        account.type = payload.type.strip()
+    if payload.domain is not None:
+        _check_domain(payload.domain)
+        account.domain = payload.domain
     db.commit()
     db.refresh(account)
     return account
@@ -149,7 +176,8 @@ def delete_category(id, db=Depends(get_db)):
 
 @router.get("/transactions", response_model=schemas.Page[schemas.TransactionRead])
 def list_transactions(paging=Depends(pagination), account_id=None, category_id=None,
-                      date_from=None, date_to=None, q=None, db=Depends(get_db)):
+                      date_from=None, date_to=None, q=None, domain=None,
+                      transaction_kind=None, db=Depends(get_db)):
     limit, offset = paging
     stmt = select(models.Transaction)
     total_stmt = select(func.count()).select_from(models.Transaction)
@@ -157,6 +185,13 @@ def list_transactions(paging=Depends(pagination), account_id=None, category_id=N
         aid = _as_int(account_id, "account_id")
         stmt = stmt.where(models.Transaction.account_id == aid)
         total_stmt = total_stmt.where(models.Transaction.account_id == aid)
+    if domain is not None:
+        _check_domain(domain)
+        stmt = stmt.join(models.Account).where(models.Account.domain == domain)
+        total_stmt = total_stmt.join(models.Account).where(models.Account.domain == domain)
+    if transaction_kind is not None:
+        stmt = stmt.where(models.Transaction.transaction_kind == transaction_kind)
+        total_stmt = total_stmt.where(models.Transaction.transaction_kind == transaction_kind)
     if category_id is not None:
         cid = _as_int(category_id, "category_id")
         stmt = stmt.where(models.Transaction.category_id == cid)
@@ -195,6 +230,8 @@ def update_transaction(id, payload: schemas.TransactionUpdate, db=Depends(get_db
         _get_or_404(db, models.Account, data["account_id"])
     if data.get("category_id") is not None:
         _get_or_404(db, models.Category, data["category_id"])
+    if data.get("transaction_kind") is not None:
+        _check_kind(data["transaction_kind"])
     if "category_id" in data:
         data["category_source"] = "manual"
     for k, v in data.items():
@@ -217,6 +254,7 @@ def create_transaction(payload: schemas.TransactionCreate, db=Depends(get_db)):
     _get_or_404(db, models.Account, payload.account_id)
     if payload.category_id is not None:
         _get_or_404(db, models.Category, payload.category_id)
+    _check_kind(payload.transaction_kind)
     t = models.Transaction(**payload.model_dump())
     t.fingerprint = compute_fingerprint(
         t.date, t.amount_cents, t.account_id, t.merchant)
@@ -225,12 +263,25 @@ def create_transaction(payload: schemas.TransactionCreate, db=Depends(get_db)):
 
 
 @router.post("/import/csv")
-def csv_import(file: UploadFile, account_id=None, profile="empower", db=Depends(get_db)):
+def csv_import(file: UploadFile, account_id=None, profile="empower",
+               file_kind="mixed", mapping=None, db=Depends(get_db)):
     aid = None
     if account_id is not None:
         aid = _as_int(account_id, "account_id")
         _get_or_404(db, models.Account, aid)
-    return import_csv(db, aid, file.file.read(), profile, file.filename or "")
+    if file_kind not in ("mixed", "brokerage", "spending"):
+        raise HTTPException(status_code=422, detail="Invalid file kind")
+    parsed_mapping = None
+    if mapping:
+        import json
+        try:
+            parsed_mapping = json.loads(mapping)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="mapping must be a JSON object")
+        if not isinstance(parsed_mapping, dict):
+            raise HTTPException(status_code=422, detail="mapping must be a JSON object")
+    return import_csv(db, aid, file.file.read(), profile, file.filename or "",
+                      file_kind, parsed_mapping)
 
 
 @router.post("/import/ofx")
@@ -240,6 +291,83 @@ def ofx_import(file: UploadFile, account_id=None, db=Depends(get_db)):
         aid = _as_int(account_id, "account_id")
         _get_or_404(db, models.Account, aid)
     return import_ofx(db, aid, file.file.read(), file.filename or "")
+
+
+@router.post("/import/scan")
+def import_scan(file: UploadFile, file_kind=None, mapping=None, db=Depends(get_db)):
+    """Dry-run header scan: detection + proposed mapping + samples, no writes.
+
+    Optional file_kind + mapping (JSON object) preview classification
+    counts for a user-edited mapping instead of the proposed one.
+    """
+    import csv as csvmod
+    import io
+    import json
+    from ...services.classify import classify, normalize_mapped
+    try:
+        text = file.file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="file must be UTF-8 CSV")
+    reader = csvmod.DictReader(io.StringIO(text))
+    headers = [h for h in (reader.fieldnames or []) if h is not None]
+    headers = [h for h in headers if str(h).strip() != ""]
+    if not headers:
+        raise HTTPException(status_code=422, detail="no columns found: not a CSV")
+    proposed = propose_mapping(headers)
+    if all(v is None for v in proposed.values()):
+        raise HTTPException(status_code=422, detail="no recognizable columns")
+    active_mapping = proposed
+    if mapping:
+        try:
+            custom = json.loads(mapping)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="mapping must be a JSON object")
+        if not isinstance(custom, dict):
+            raise HTTPException(status_code=422, detail="mapping must be a JSON object")
+        active_mapping = {f: custom.get(f) for f in proposed}
+    kind = file_kind or "mixed"
+    if kind not in ("mixed", "brokerage", "spending"):
+        raise HTTPException(status_code=422, detail="Invalid file kind")
+    rows = list(reader)
+    samples = []
+    for row in rows[:5]:
+        rendered = {}
+        for field, col in active_mapping.items():
+            if col is not None:
+                rendered[field] = (row.get(col) or "").strip()
+        samples.append({"raw": {k: row.get(k, "") for k in headers},
+                        "rendered": rendered})
+    counts, skipped = {}, 0
+    for row in rows:
+        norm = normalize_mapped(row, active_mapping)
+        if norm is None:
+            skipped += 1
+            continue
+        row_kind, _detail = classify(norm, kind)
+        counts[row_kind] = counts.get(row_kind, 0) + 1
+    source, confidence = detect_source(headers)
+    if source == "robinhood":
+        suggested_file_kind = "brokerage"
+    elif source == "lots":
+        suggested_file_kind = "brokerage"
+    else:
+        suggested_file_kind = "mixed"
+    return {"filename": file.filename or "",
+            "signature": header_signature(headers),
+            "headers": headers,
+            "detected_source": source,
+            "detection_confidence": confidence,
+            "mapping": active_mapping,
+            "unmapped_columns": unmapped_columns(headers, active_mapping),
+            "has_date": active_mapping.get("date") is not None,
+            "has_money": active_mapping.get("amount") is not None or (
+                active_mapping.get("price") is not None
+                and active_mapping.get("quantity") is not None),
+            "suggested_file_kind": suggested_file_kind,
+            "file_kind": kind,
+            "counts": counts,
+            "skipped": skipped,
+            "samples": samples}
 
 
 @router.get("/import/batches", response_model=schemas.Page[schemas.BatchRead])
@@ -256,13 +384,23 @@ def get_batch(id, db=Depends(get_db)):
     b = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
     counts = dict(db.query(models.StagingRow.status, func.count()).filter_by(
         batch_id=b.id).group_by(models.StagingRow.status).all())
+    kinds = dict(db.query(models.StagingRow.row_kind, func.count()).filter_by(
+        batch_id=b.id).group_by(models.StagingRow.row_kind).all())
     return {"id": b.id, "profile": b.profile, "filename": b.filename,
             "account_id": b.account_id, "created_at": b.created_at,
-            "staged": b.staged, "skipped": b.skipped, "by_status": counts}
+            "staged": b.staged, "skipped": b.skipped, "by_status": counts,
+            "by_kind": kinds, "file_kind": b.file_kind, "mapping": b.mapping,
+            "status": b.status, "rolled_back_at": b.rolled_back_at}
+
+
+@router.post("/import/batches/{id}/rollback")
+def rollback_import(id, db=Depends(get_db)):
+    from ...services.import_rollback import rollback_batch
+    return rollback_batch(db, _as_int(id, "id"))
 
 
 @router.get("/import/batches/{id}/rows", response_model=schemas.Page[schemas.StagingRowRead])
-def batch_rows(id, paging=Depends(pagination), status=None, db=Depends(get_db)):
+def batch_rows(id, paging=Depends(pagination), status=None, kind=None, db=Depends(get_db)):
     bid = _as_int(id, "id")
     _get_or_404(db, models.ImportBatch, bid)
     limit, offset = paging
@@ -272,6 +410,11 @@ def batch_rows(id, paging=Depends(pagination), status=None, db=Depends(get_db)):
     if status is not None:
         stmt = stmt.where(models.StagingRow.status == status)
         total_stmt = total_stmt.where(models.StagingRow.status == status)
+    if kind is not None:
+        if kind not in ("spend", "brokerage_cash", "trade", "unknown"):
+            raise HTTPException(status_code=422, detail="Invalid row kind")
+        stmt = stmt.where(models.StagingRow.row_kind == kind)
+        total_stmt = total_stmt.where(models.StagingRow.row_kind == kind)
     total = db.scalar(total_stmt) or 0
     items = db.scalars(stmt.order_by(models.StagingRow.id).limit(limit).offset(offset)).all()
     return {"items": items, "total": total}
@@ -308,6 +451,59 @@ def merge_safe(id, db=Depends(get_db)):
     return {"ok": True, "merged": merged, "held": held}
 
 
+@router.post("/import/batches/{id}/approve-trade")
+def approve_trade(id, staging_id: int, side=None, db=Depends(get_db)):
+    """Approve a staged trade row into an investment order (idempotent).
+
+    Optional side override (buy/sell) corrects a misread suggestion.
+    Approving twice, or approving a re-uploaded duplicate, returns the
+    same order without creating new lots.
+    """
+    import json
+    from ...services.fingerprint import order_fingerprint
+    from ...services.funding import auto_link_funding
+    from ...services.orders import create_order, find_order
+    b = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
+    s = db.get(models.StagingRow, _as_int(staging_id, "staging_id"))
+    if s is None or s.batch_id != b.id:
+        raise HTTPException(status_code=404, detail="Not found")
+    if s.status not in ("pending", "duplicate"):
+        raise HTTPException(status_code=409, detail=f"already {s.status}")
+    if s.row_kind != "trade":
+        raise HTTPException(status_code=422, detail="only trade rows approve as orders")
+    try:
+        trade = json.loads(s.trade_json or "{}")
+    except ValueError:
+        trade = {}
+    trade_side = side or trade.get("side", "buy")
+    if trade_side not in ("buy", "sell"):
+        raise HTTPException(status_code=422, detail="Side must be buy or sell")
+    if not trade.get("symbol") or not trade.get("quantity_milli") \
+            or not trade.get("price_cents"):
+        raise HTTPException(status_code=422, detail="trade needs symbol, quantity, and price")
+    aid = s.account_id if s.account_id is not None else b.account_id
+    if aid is None:
+        raise HTTPException(status_code=422, detail="trade needs an account")
+    fp = order_fingerprint(aid, trade["symbol"], trade_side,
+                           trade["quantity_milli"], trade["price_cents"], 0,
+                           s.date)
+    existed = find_order(db, fp) is not None
+    order = create_order(db, aid, trade["symbol"], trade_side,
+                         trade["quantity_milli"], trade["price_cents"], 0,
+                         s.date)
+    funded_id = None
+    if not existed:
+        leg = auto_link_funding(db, order)
+        funded_id = leg.id if leg is not None else None
+        order.import_batch_id = b.id
+        db.commit()
+    if s.status == "pending":
+        s.status = "merged"
+        db.commit()
+    return {"ok": True, "order_id": order.id, "created": not existed,
+            "funded_transaction_id": funded_id}
+
+
 @router.post("/admin/clear")
 def admin_clear(db=Depends(get_db)):
     from ...services.admin import clear_database
@@ -336,8 +532,10 @@ def export_transactions(account_id=None, date_from=None, date_to=None, db=Depend
 
 
 @router.get("/budgets/{month}")
-def budgets(month: str, db=Depends(get_db)):
-    return analytics.budget_status(db, month)
+def budgets(month: str, domain=None, db=Depends(get_db)):
+    if domain is not None:
+        _check_domain_param(domain)
+    return analytics.budget_status(db, month, domain)
 
 
 @router.post("/budgets", response_model=schemas.BudgetRead)
@@ -649,69 +847,33 @@ def investment_orders_analysis(db=Depends(get_db)):
 
 @router.post("/investment-orders", response_model=schemas.OrderRead)
 def create_investment_order(payload: schemas.OrderCreate, db=Depends(get_db)):
-    if payload.side not in ("buy", "sell"):
-        raise HTTPException(status_code=422, detail="Side must be buy or sell")
-    if payload.quantity_milli <= 0 or payload.price_cents <= 0 or payload.fees_cents < 0:
-        raise HTTPException(status_code=422, detail="Quantity, price, and fees are invalid")
-    _get_or_404(db, models.Account, payload.account_id)
-    symbol = payload.symbol.strip().upper()
-    if not symbol:
-        raise HTTPException(status_code=422, detail="Symbol is required")
-    quantity = payload.quantity_milli
-    proceeds = (quantity * payload.price_cents) // 1000 - payload.fees_cents
-    cost_basis = None
-    gain = None
-    if payload.side == "buy":
-        cost_basis = (quantity * payload.price_cents) // 1000 + payload.fees_cents
-        db.add(models.InvestmentLot(symbol=symbol, account_id=payload.account_id,
-                                    quantity_milli=quantity, cost_cents=cost_basis,
-                                    acquired=payload.executed_at))
-    else:
-        remaining = quantity
-        cost_basis = 0
-        lots = db.scalars(select(models.InvestmentLot).where(
-            models.InvestmentLot.account_id == payload.account_id,
-            func.upper(models.InvestmentLot.symbol) == symbol,
-            models.InvestmentLot.quantity_milli > 0,
-        ).order_by(models.InvestmentLot.acquired, models.InvestmentLot.id)).all()
-        for lot in lots:
-            if not remaining:
-                break
-            consumed = min(remaining, lot.quantity_milli)
-            lot_cost = (lot.cost_cents * consumed) // lot.quantity_milli
-            lot.quantity_milli -= consumed
-            lot.cost_cents -= lot_cost
-            cost_basis += lot_cost
-            remaining -= consumed
-        if remaining:
-            raise HTTPException(status_code=422, detail="Sell exceeds available FIFO shares")
-        gain = proceeds - cost_basis
-    order = models.InvestmentOrder(
-        account_id=payload.account_id, symbol=symbol, side=payload.side,
-        quantity_milli=quantity, price_cents=payload.price_cents,
-        fees_cents=payload.fees_cents, executed_at=payload.executed_at,
-        proceeds_cents=proceeds if payload.side == "sell" else None,
-        cost_basis_cents=cost_basis, gain_cents=gain,
-    )
-    holding = db.query(models.Holding).filter(
-        func.upper(models.Holding.symbol) == symbol,
-        models.Holding.account_id == payload.account_id).order_by(models.Holding.id).first()
-    delta = quantity if payload.side == "buy" else -quantity
-    if holding is None:
-        if delta < 0:
-            raise HTTPException(status_code=422, detail="No holding exists for this sell")
-        holding = models.Holding(symbol=symbol, account_id=payload.account_id,
-                                 quantity_milli=delta, price_cents=payload.price_cents)
-        db.add(holding)
-    else:
-        if holding.quantity_milli + delta < 0:
-            raise HTTPException(status_code=422, detail="Sell exceeds holding shares")
-        holding.quantity_milli += delta
-        holding.price_cents = payload.price_cents
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-    return order
+    from ...services.orders import create_order
+    return create_order(db, payload.account_id, payload.symbol, payload.side,
+                        payload.quantity_milli, payload.price_cents,
+                        payload.fees_cents, payload.executed_at,
+                        payload.linked_transaction_id)
+
+
+@router.get("/funded-buys/suggestions")
+def funded_buy_suggestions(db=Depends(get_db)):
+    from ...services.funding import suggestions
+    return suggestions(db)
+
+
+@router.post("/investment-orders/{id}/link-funding")
+def link_order_funding(id, transaction_id=None, db=Depends(get_db)):
+    from ...services.funding import link_funding
+    tid = None
+    if transaction_id is not None:
+        tid = _as_int(transaction_id, "transaction_id")
+    txn = link_funding(db, _as_int(id, "id"), tid)
+    return {"ok": True, "transaction_id": txn.id}
+
+
+@router.delete("/investment-orders/{id}/link")
+def unlink_order(id, db=Depends(get_db)):
+    from ...services.funding import unlink_order as do_unlink
+    return do_unlink(db, _as_int(id, "id"))
 
 
 @router.post("/transfers/link")
@@ -763,29 +925,35 @@ def delete_rule(id, db=Depends(get_db)):
 
 
 @router.get("/reports/{month}")
-def reports(month: str, db=Depends(get_db)):
+def reports(month: str, domain=None, db=Depends(get_db)):
+    if domain is not None:
+        _check_domain_param(domain)
     return {"month": month,
-            "spend_by_category": analytics.monthly_spend(db, month),
-            "budgets": analytics.budget_status(db, month),
+            "spend_by_category": analytics.monthly_spend(db, month, domain),
+            "budgets": analytics.budget_status(db, month, domain),
             "net_worth": analytics.net_worth(db)}
 
 
 @router.get("/reports-trends")
-def reports_trends(months=12, db=Depends(get_db)):
+def reports_trends(months=12, domain=None, db=Depends(get_db)):
     try:
         n = int(months)
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="months must be an integer")
-    return analytics.monthly_trends(db, n)
+    if domain is not None:
+        _check_domain_param(domain)
+    return analytics.monthly_trends(db, n, domain)
 
 
 @router.get("/reports-category-trends")
-def reports_category_trends(months=6, db=Depends(get_db)):
+def reports_category_trends(months=6, domain=None, db=Depends(get_db)):
     try:
         n = int(months)
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="months must be an integer")
-    return analytics.category_trends(db, n)
+    if domain is not None:
+        _check_domain_param(domain)
+    return analytics.category_trends(db, n, domain)
 
 
 @router.get("/net-worth-history")

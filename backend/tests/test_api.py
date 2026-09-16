@@ -53,6 +53,19 @@ def test_account_name_can_be_updated(client):
     assert client.patch(f"/api/accounts/{other['id']}", json={"name": "Main checking"}).status_code == 409
 
 
+def test_accounts_have_explicit_domain(client):
+    response = client.post("/api/accounts", json={
+        "name": "Robinhood", "type": "brokerage", "domain": "investing",
+    })
+    assert response.status_code == 200
+    assert response.json()["domain"] == "investing"
+    account_id = response.json()["id"]
+    response = client.patch(f"/api/accounts/{account_id}", json={"domain": "spending"})
+    assert response.status_code == 200
+    assert response.json()["domain"] == "spending"
+    assert client.patch(f"/api/accounts/{account_id}", json={"domain": "invalid"}).status_code == 422
+
+
 def test_list_envelope_and_paging(client):
     _make_accounts(client, 3)
     body = client.get("/api/accounts").json()

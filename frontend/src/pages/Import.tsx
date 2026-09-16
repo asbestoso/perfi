@@ -79,6 +79,43 @@ function TransferSuggestions({ tick, onChange }: any) {
   );
 }
 
+const LAYOUT_KEY = "perfi.importLayouts";
+
+function loadLayouts() {
+  try {
+    return JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+const MAP_FIELDS = [
+  ["date", "Date"], ["merchant", "Description"], ["amount", "Amount"],
+  ["type", "Type / action"], ["symbol", "Symbol"], ["quantity", "Quantity"],
+  ["price", "Price"], ["account", "Account"], ["category", "Category"],
+  ["note", "Note"],
+];
+
+const FILE_KINDS = [
+  ["mixed", "Mixed"], ["brokerage", "Brokerage only"], ["spending", "Spending only"],
+];
+
+async function postScan(file: any, fileKind?: string, mapping?: any) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const qs = new URLSearchParams();
+  if (fileKind) qs.set("file_kind", fileKind);
+  if (mapping) qs.set("mapping", JSON.stringify(mapping));
+  const q = qs.toString();
+  return api(q ? `/api/import/scan?${q}` : "/api/import/scan",
+    { method: "POST", body: fd });
+}
+
+function kindSummary(counts: any) {
+  const parts = Object.entries(counts || {}).map(([k, v]) => `${v} ${k.replace("_", " ")}`);
+  return parts.length ? parts.join(" · ") : "nothing parseable";
+}
+
 function UploadForm({ onDone }: any) {
   const [profile, setProfile] = useState("empower");
   const [kind, setKind] = useState("csv");
@@ -88,42 +125,214 @@ function UploadForm({ onDone }: any) {
     setMsg("Uploading…");
     const file = e.target.elements.file.files[0];
     if (!file) { setMsg("Pick a file first."); return; }
+    if (kind === "ofx") {
+      try {
+        const r = await api("/api/import/ofx", { method: "POST", body: ofxData(file) });
+        const merged = await api(`/api/import/batches/${r.batch_id}/merge-safe`, { method: "POST" });
+        setMsg(`Added ${merged.merged} automatically, held ${merged.held.length} for review (batch ${r.batch_id}).`);
+        onDone(r.batch_id);
+      } catch (err: any) {
+        setMsg(`Failed: ${err.message}`);
+      }
+      return;
+    }
+    setPendingFile(file);
+    setMsg("");
+    await runScan(file);
+  }
+  function ofxData(file: any) {
     const fd = new FormData();
     fd.append("file", file);
+    return fd;
+  }
+
+  // CSV confirm flow state below (OFX uploads skip confirmation).
+  const [pendingFile, setPendingFile] = useState<any>(null);
+  const [scan, setScan] = useState<any>(null);
+  const [mapping, setMapping] = useState<any>(null);
+  const [fileKind, setFileKind] = useState("mixed");
+  const [recognized, setRecognized] = useState<any>(null);
+  const [scanning, setScanning] = useState(false);
+
+  async function runScan(file: any, nextKind?: string, nextMapping?: any) {
+    setScanning(true);
     try {
+      const res = await postScan(file, nextKind, nextMapping);
+      setScan(res);
+      if (!nextMapping) setMapping(res.mapping);
+      if (!nextKind) {
+        const saved = loadLayouts()[res.signature];
+        if (saved) {
+          setRecognized(saved);
+          setMapping(saved.mapping);
+          setFileKind(saved.file_kind);
+          // Refresh the preview counts for the saved kind, not the suggestion.
+          const refreshed = await postScan(file, saved.file_kind, saved.mapping);
+          setScan(refreshed);
+        } else {
+          setRecognized(null);
+          setFileKind(res.suggested_file_kind);
+        }
+      }
+      setMsg("");
+    } catch (err: any) {
+      setScan(null);
+      setMsg(`Could not read that file: ${err.message}. Check it is a CSV with recognizable columns.`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function changeMapping(field: string, column: string) {
+    const next = { ...mapping, [field]: column || null };
+    setMapping(next);
+    if (pendingFile) runScan(pendingFile, fileKind, next);
+  }
+
+  function changeKind(nextKind: string) {
+    setFileKind(nextKind);
+    setRecognized(null);
+    if (pendingFile) runScan(pendingFile, nextKind, mapping);
+  }
+
+  async function confirmUpload(useSaved?: boolean) {
+    if (!pendingFile) return;
+    const finalMapping = useSaved ? recognized.mapping : mapping;
+    const finalKind = useSaved ? recognized.file_kind : fileKind;
+    setMsg("Uploading…");
+    try {
+      const fd = new FormData();
+      fd.append("file", pendingFile);
       const r = await api(
-        `/api/import/${kind}?profile=${profile}`,
+        `/api/import/csv?profile=${profile}&file_kind=${finalKind}&mapping=${encodeURIComponent(JSON.stringify(finalMapping))}`,
         { method: "POST", body: fd }
       );
+      const layouts = loadLayouts();
+      layouts[scan.signature] = { mapping: finalMapping, file_kind: finalKind, source: scan.detected_source };
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(layouts));
       const merged = await api(`/api/import/batches/${r.batch_id}/merge-safe`, { method: "POST" });
       const accts = (r.accounts || []).join(", ");
       const categories = (r.new_categories || []).join(", ");
-      setMsg(`Added ${merged.merged} automatically, held ${merged.held.length} for review (batch ${r.batch_id})${accts ? ` → ${accts}` : ""}${categories ? `. New categories: ${categories}` : ""}.`);
+      setMsg(`Added ${merged.merged} automatically, held ${merged.held.length} for review (batch ${r.batch_id}: ${kindSummary(r.by_kind)})${accts ? ` → ${accts}` : ""}${categories ? `. New categories: ${categories}` : ""}.`);
+      setPendingFile(null);
+      setScan(null);
       onDone(r.batch_id);
     } catch (err: any) {
       setMsg(`Failed: ${err.message}`);
     }
   }
+
+  function reset() {
+    setPendingFile(null);
+    setScan(null);
+    setMapping(null);
+    setRecognized(null);
+    setMsg("");
+  }
+
+  const canConfirm = scan && scan.has_date && scan.has_money;
+  const moneyUnmapped = scan && (scan.unmapped_columns || []).some((c: string) =>
+    /amount|total|price|qty|quantity/i.test(c) && c !== mapping?.amount &&
+    c !== mapping?.price && c !== mapping?.quantity);
+
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-      <label className="text-sm">Type
-        <select value={kind} onChange={(e) => setKind(e.target.value)} className={`${inputCls} ml-1`}>
-          <option value="csv">CSV</option>
-          <option value="ofx">OFX</option>
-        </select>
-      </label>
-      {kind === "csv" && (
-        <label className="text-sm">Profile
-          <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${inputCls} ml-1`}>
-            <option value="empower">Empower</option>
-            <option value="mint">Mint</option>
+    <div className="space-y-3">
+      <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
+        <label className="text-sm">Type
+          <select value={kind} onChange={(e) => { setKind(e.target.value); reset(); }} className={`${inputCls} ml-1`}>
+            <option value="csv">CSV</option>
+            <option value="ofx">OFX</option>
           </select>
         </label>
+        {kind === "csv" && (
+          <label className="text-sm">Profile
+            <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${inputCls} ml-1`}>
+              <option value="empower">Empower</option>
+              <option value="mint">Mint</option>
+            </select>
+          </label>
+        )}
+        <input name="file" type="file" accept={kind === "csv" ? ".csv" : ".ofx,.qfx"} className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
+        <button className={btnCls}>{kind === "ofx" ? "Upload" : scanning ? "Scanning…" : "Scan file"}</button>
+        {msg && <span className="text-sm text-slate-600">{msg}</span>}
+      </form>
+
+      {kind === "csv" && scan && pendingFile && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+          {recognized ? (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span>
+                Recognized <b>{scan.detected_source}</b> layout — saved mapping will be reused
+                ({kindSummary(scan.counts)}).
+              </span>
+              <button onClick={() => confirmUpload(true)} className={btnCls}>Upload</button>
+              <button onClick={() => setRecognized(null)} className={btnSecCls}>Change</button>
+              <button onClick={reset} className={btnSmCls}>Cancel</button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">
+                New layout detected as <b>{scan.detected_source}</b> ({scan.detection_confidence} confidence).
+                Confirm what each column means — nothing is written until you upload.
+              </p>
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="mr-1 text-sm text-slate-600">This file is:</span>
+                {FILE_KINDS.map(([v, label]) => (
+                  <button key={v} onClick={() => changeKind(v)}
+                    className={v === fileKind ? btnSmCls + " bg-pine-800 text-white" : btnSmCls}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {MAP_FIELDS.map(([field, label]) => (
+                  <label key={field} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="text-slate-600">{label}</span>
+                    <select value={mapping?.[field] || ""}
+                      onChange={(e) => changeMapping(field, e.target.value)}
+                      className={`${inputCls} w-48`}>
+                      <option value="">Ignore</option>
+                      {scan.headers.map((h: string) => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </label>
+                ))}
+              </div>
+              <p className="text-sm tabular-nums text-slate-600">
+                Preview: {kindSummary(scan.counts)}
+                {scan.skipped > 0 && ` · ${scan.skipped} skipped (bad date or amount)`}
+              </p>
+              {moneyUnmapped && (
+                <p className="text-sm font-medium text-amber-800">
+                  A money column is unmapped — rows may misclassify. Link Amount (or Price + Quantity) to fix.
+                </p>
+              )}
+              {!canConfirm && (
+                <p className="text-sm font-medium text-red-700">
+                  {!scan.has_date && !scan.has_money
+                    ? "Link a Date column and a money column (Amount, or Price + Quantity) to continue."
+                    : !scan.has_date
+                      ? "Link a Date column to continue."
+                      : "Link a money column (Amount, or Price + Quantity) to continue."}
+                </p>
+              )}
+              {(scan.samples || []).slice(0, 3).map((s: any, i: number) => (
+                <div key={i} className="rounded-md bg-white px-3 py-2 text-xs text-slate-600">
+                  {MAP_FIELDS.filter(([f]) => s.rendered?.[f]).map(([f, label]) => (
+                    <span key={f} className="mr-3"><b>{label}:</b> {s.rendered[f]}</span>
+                  ))}
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <button onClick={() => confirmUpload()} disabled={!canConfirm} className={btnCls}>
+                  Confirm & upload
+                </button>
+                <button onClick={reset} className={btnSecCls}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
-      <input name="file" type="file" accept={kind === "csv" ? ".csv" : ".ofx,.qfx"} className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
-      <button className={btnCls}>Upload</button>
-      {msg && <span className="text-sm text-slate-600">{msg}</span>}
-    </form>
+    </div>
   );
 }
 
@@ -141,7 +350,7 @@ function BatchList({ active, onSelect, tick }: any) {
               active === b.id ? "bg-pine-100/60 font-semibold" : "hover:bg-slate-50"
             }`}
           >
-            <span>#{b.id} {b.filename || "(upload)"} · {b.profile}</span>
+            <span>#{b.id} {b.filename || "(upload)"} · {b.profile} · {b.file_kind}</span>
             <span className="flex items-center gap-2 text-slate-500 tabular-nums">
               staged {b.staged} · skipped {b.skipped}
             </span>
@@ -154,9 +363,11 @@ function BatchList({ active, onSelect, tick }: any) {
 
 function RowQueue({ batchId, tick, onChange }: any) {
   const [filter, setFilter] = useState("pending");
+  const [kindFilter, setKindFilter] = useState("");
   const [review, setReview] = useState<any>(null);
   const [msg, setMsg] = useState("");
-  const data = useGet(`/api/import/batches/${batchId}/rows?status=${filter}&tick=${tick}`);
+  const kindQs = kindFilter ? `&kind=${kindFilter}` : "";
+  const data = useGet(`/api/import/batches/${batchId}/rows?status=${filter}${kindQs}&tick=${tick}`);
   const rows = data?.items || [];
   async function act(id: number, action: string) {
     await api(`/api/import/batches/${batchId}/resolve?staging_id=${id}&action=${action}`, { method: "POST" });
@@ -199,6 +410,13 @@ function RowQueue({ batchId, tick, onChange }: any) {
           <option value="duplicate">Duplicates</option>
           <option value="merged">Merged</option>
           <option value="discarded">Discarded</option>
+        </select>
+        <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value)} className={inputCls}>
+          <option value="">All kinds</option>
+          <option value="spend">Spend</option>
+          <option value="brokerage_cash">Brokerage cash</option>
+          <option value="trade">Trades</option>
+          <option value="unknown">Needs review</option>
         </select>
         <button onClick={checkReview} className={btnSecCls}>
           Review
@@ -266,27 +484,245 @@ function RowQueue({ batchId, tick, onChange }: any) {
   );
 }
 
+function FundingSuggestions({ tick, onChange }: any) {
+  const [msg, setMsg] = useState("");
+  const data = useGet(`/api/funded-buys/suggestions?tick=${tick}`);
+  const items = Array.isArray(data) ? data : [];
+  async function link(orderId: number, txnId: number) {
+    try {
+      await api(`/api/investment-orders/${orderId}/link-funding?transaction_id=${txnId}`,
+        { method: "POST" });
+      setMsg("Funded buy linked.");
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  if (items.length === 0) return null;
+  return (
+    <Card title={`Funded buys to link (${items.length})`}>
+      <p className="mb-3 text-sm text-slate-500">
+        These buys have possible funding deposits. Linking keeps the deposit out of spending.
+      </p>
+      {msg && <p className="mb-2 text-sm text-slate-600">{msg}</p>}
+      <ul className="divide-y divide-slate-100">
+        {items.map((s: any) => (
+          <li key={s.order_id} className="py-2 text-sm">
+            <span className="font-medium">{s.symbol} · {dollars(s.principal_cents)} · {s.executed_at}</span>
+            <div className="mt-1 space-y-1">
+              {(s.candidates || []).map((c: any) => (
+                <div key={c.id} className="flex items-center justify-between gap-2 text-slate-600">
+                  <span>{c.date} · {c.merchant} · {dollars(c.amount_cents)}</span>
+                  <button onClick={() => link(s.order_id, c.id)} className={btnSmCls}>Link</button>
+                </div>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function TradeCard({ row, batchId, onChange }: any) {
+  const t = row.trade_json || {};
+  const [side, setSide] = useState(t.side || "buy");
+  const [msg, setMsg] = useState("");
+  const shares = (Number(t.quantity_milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
+  async function approve() {
+    try {
+      const r = await api(
+        `/api/import/batches/${batchId}/approve-trade?staging_id=${row.id}&side=${side}`,
+        { method: "POST" });
+      setMsg(r.created
+        ? `Order #${r.order_id} created${r.funded_transaction_id ? `, funded by txn #${r.funded_transaction_id}` : ""}.`
+        : `Already recorded as order #${r.order_id} — nothing duplicated.`);
+      onChange();
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
+  async function discard() {
+    await api(`/api/import/batches/${batchId}/resolve?staging_id=${row.id}&action=discard`,
+      { method: "POST" });
+    onChange();
+  }
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+      <div>
+        <span className="font-medium">{t.symbol || row.merchant}</span>
+        <span className="text-slate-500"> · {shares} shares @ {dollars(t.price_cents)} · {row.date}</span>
+        {row.row_detail && <span className="text-slate-400"> · {row.row_detail}</span>}
+      </div>
+      <div className="flex items-center gap-1">
+        <select value={side} onChange={(e) => setSide(e.target.value)} className={inputCls}>
+          <option value="buy">Buy</option>
+          <option value="sell">Sell</option>
+        </select>
+        <button onClick={approve} className={btnSmCls}>Approve</button>
+        <button onClick={discard} className={btnSmCls}>Discard</button>
+      </div>
+      {msg && <span className="basis-full text-sm text-slate-600">{msg}</span>}
+    </li>
+  );
+}
+
+function TradeQueue({ batchId, tick, onChange }: any) {
+  const data = useGet(`/api/import/batches/${batchId}/rows?kind=trade&status=pending&tick=${tick}`);
+  const rows = data?.items || [];
+  if (rows.length === 0) return null;
+  return (
+    <Card title={`Trades to approve (${rows.length})`}>
+      <p className="mb-2 text-sm text-slate-500">
+        Approving creates the order, tax lot, and holding — never a spending transaction. Re-approvals are no-ops.
+      </p>
+      <ul className="divide-y divide-slate-100">
+        {rows.map((r: any) => <TradeCard key={r.id} row={r} batchId={batchId} onChange={onChange} />)}
+      </ul>
+    </Card>
+  );
+}
+
+function UnknownQueue({ batchId, tick, onChange }: any) {
+  const data = useGet(`/api/import/batches/${batchId}/rows?kind=unknown&status=pending&tick=${tick}`);
+  const rows = data?.items || [];
+  if (rows.length === 0) return null;
+  async function discard(id: number) {
+    await api(`/api/import/batches/${batchId}/resolve?staging_id=${id}&action=discard`,
+      { method: "POST" });
+    onChange();
+  }
+  return (
+    <Card title={`Needs review (${rows.length})`}>
+      <p className="mb-2 text-sm text-slate-500">
+        Unrecognized activity — these never post automatically. Discard what you don't need.
+      </p>
+      <ul className="divide-y divide-slate-100">
+        {rows.map((r: any) => (
+          <li key={r.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+            <div>
+              <span className="font-medium">{r.merchant}</span>
+              <span className="text-slate-500"> · {r.date} · </span>
+              <Amt cents={r.amount_cents} />
+              {r.row_detail && <div className="text-xs text-amber-800">{r.row_detail}</div>}
+            </div>
+            <button onClick={() => discard(r.id)} className={btnSmCls}>Discard</button>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+function BatchSummary({ batchId, tick, onChange }: any) {
+  const data = useGet(`/api/import/batches/${batchId}?tick=${tick}`);
+  if (!data || data.error) return null;
+  async function rollback() {
+    if (!window.confirm(
+      `Roll back batch #${batchId}? This removes records created by this import and cannot be undone.`
+    )) return;
+    try {
+      await api(`/api/import/batches/${batchId}/rollback`, { method: "POST" });
+      onChange();
+    } catch (e: any) {
+      window.alert(`Rollback failed: ${e.message}`);
+    }
+  }
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
+      <span>{data.file_kind} file · {kindSummary(data.by_kind)}
+        {data.skipped > 0 && ` · ${data.skipped} skipped`}
+        {data.status === "rolled_back" && " · rolled back"}
+      </span>
+      {data.status !== "rolled_back" && (
+        <button onClick={rollback} className={btnSmCls}>Roll back import</button>
+      )}
+    </div>
+  );
+}
+
+function LotsUploadForm() {
+  const [msg, setMsg] = useState("");
+  async function submit(e: any) {
+    e.preventDefault();
+    setMsg("Uploading…");
+    const file = e.target.elements.file.files[0];
+    if (!file) { setMsg("Pick a file first."); return; }
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const r = await api("/api/investments/import", { method: "POST", body: fd });
+      setMsg(`Imported ${r.created} lot${r.created === 1 ? "" : "s"}, skipped ${r.skipped}. Missing cost basis and duplicates are skipped — see backend log for lines.`);
+    } catch (err: any) {
+      setMsg(`Failed: ${err.message}`);
+    }
+  }
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
+      <input name="file" type="file" accept=".csv" className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
+      <button className={btnCls}>Upload lots</button>
+      {msg && <span className="text-sm text-slate-600">{msg}</span>}
+    </form>
+  );
+}
+
 export default function Import() {
   const [batchId, setBatchId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
+  const [tab, setTab] = useState("bank");
   const bump = () => setTick((t) => t + 1);
+  const tabCls = (active: boolean) =>
+    `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+      active ? "bg-pine-800 text-white" : "text-slate-500 hover:bg-slate-100"
+    }`;
 
   return (
     <Page title="Import">
-    <TransferSuggestions tick={tick} onChange={bump} />
-    <Card title="Upload">
-        <p className="mb-2 text-sm text-slate-500">
-          Accounts are matched by name from the file and created if new. Empower is the default CSV profile.
-        </p>
-        <UploadForm onDone={(id: number) => { setBatchId(id); bump(); }} />
-      </Card>
-      <Card title="Batches">
-        <BatchList active={batchId} onSelect={setBatchId} tick={tick} />
-      </Card>
-      {batchId != null && (
-        <Card title={`Batch #${batchId} rows`}>
-          <RowQueue batchId={batchId} tick={tick} onChange={bump} />
-        </Card>
+      <div className="mb-4 flex gap-1 rounded-xl bg-slate-100 p-1">
+        <button onClick={() => setTab("bank")} className={tabCls(tab === "bank")}>
+          Bank statements
+        </button>
+        <button onClick={() => setTab("brokerage")} className={tabCls(tab === "brokerage")}>
+          Brokerage
+        </button>
+      </div>
+      {tab === "bank" ? (
+        <>
+          <TransferSuggestions tick={tick} onChange={bump} />
+          <FundingSuggestions tick={tick} onChange={bump} />
+          <Card title="Upload">
+            <p className="mb-2 text-sm text-slate-500">
+              New layouts ask you to confirm the columns first; known layouts upload straight through.
+              Accounts are matched by name and created if new.
+            </p>
+            <UploadForm onDone={(id: number) => { setBatchId(id); bump(); }} />
+          </Card>
+          <Card title="Batches">
+            <BatchList active={batchId} onSelect={setBatchId} tick={tick} />
+          </Card>
+          {batchId != null && (
+            <>
+              <TradeQueue batchId={batchId} tick={tick} onChange={bump} />
+              <UnknownQueue batchId={batchId} tick={tick} onChange={bump} />
+              <Card title={`Batch #${batchId} rows`}>
+                <BatchSummary batchId={batchId} tick={tick} onChange={bump} />
+                <RowQueue batchId={batchId} tick={tick} onChange={bump} />
+              </Card>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <Card title="Tax lots CSV">
+            <p className="mb-2 text-sm text-slate-500">
+              Columns: symbol/ticker, quantity/shares, cost/cost basis, optional acquired date.
+              Idempotent on (symbol, quantity, cost, acquired); rows without cost are skipped.
+              Lots never touch spending totals — buys/sells with cash legs belong on the Portfolio page.
+            </p>
+            <LotsUploadForm />
+          </Card>
+          <Card title="Buys & sells">
+            <p className="text-sm text-slate-500">
+              Record orders (with optional cash-leg links) on the <a href="/investments" className="font-medium text-pine-700 hover:underline">Portfolio</a> page.
+            </p>
+          </Card>
+        </>
       )}
     </Page>
   );

@@ -22,6 +22,15 @@ def compute_fingerprint(date, amount_cents, account_id, merchant):
     return sha256(payload.encode()).hexdigest()[:32]
 
 
+def order_fingerprint(account_id, symbol, side, quantity_milli, price_cents,
+                      fees_cents, executed_at):
+    """Idempotency key for investment orders (double approval, re-upload)."""
+    payload = "|".join((str(account_id), (symbol or "").upper(), side,
+                        str(quantity_milli), str(price_cents),
+                        str(fees_cents), executed_at.isoformat()))
+    return sha256(payload.encode()).hexdigest()[:32]
+
+
 def obvious_merchant_match(a, b):
     """True only for near-identical merchants: equal or containing.
 

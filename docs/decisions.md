@@ -41,3 +41,46 @@ were deleted; the live session log itself was left alone.
   for now, flagged as a merge risk, not fixed.
 - Category seed-mapping for Monarch names is still manual; snapshot
   scheduling is manual (`POST /api/snapshots/run`); bank sync is a non-goal.
+
+## 2026-09-16 — mixed-file import rework
+
+- Intake is scan-then-confirm: unknown layouts stage nothing until the
+  user confirms mapping + file kind; remembered layouts (localStorage,
+  keyed by header signature) skip confirmation with a Change affordance.
+- Classification is mode-gated (Mixed / Brokerage only / Spending only),
+  not one confidence-ranked classifier: brokerage-only skips spend
+  entirely, spending-only diverts trade-shaped rows to review. Unknown
+  Trans Codes fail safe to `unknown` review rows; the code table
+  (`CASH_CODES`) grows one line per new cash activity.
+- Order creation moved verbatim into `services/orders.py` (API + approval
+  share it) and gained fingerprint idempotency; re-uploads and double
+  approvals return the same order without touching lots.
+- Funded-buy auto-link needs an exact principal match, one candidate, 14
+  days. `DELETE /investment-orders/{id}/link` reverses every `order:*`
+  mark — closing the "no unlink yet" gap from the domain-separation entry.
+- Repair migration `b8c9d0e1f2a3`: the f6 revision file grew new columns
+  after app-startup auto-migrate had already stamped it on the dev DB, so
+  a follow-up revision applies the difference. Lesson: treat a migration
+  file as frozen once any environment may have run it — new columns mean
+  a new revision.
+
+## 2026-09-16 — spending/investing domain separation
+
+- `Account.domain` (`spending` | `investing` | `mixed`) is the separation
+  axis; migration `d4e5f6a7b8c9` backfills investing from type
+  (`brokerage`, `401k`, `roth`, `traditional ira`, `hsa`, `529`).
+  `Transaction.transaction_kind` (`expense`, `income`,
+  `investment_contribution`, `investment_distribution`) is the second axis:
+  capital flows stay out of spend even under `domain=all`.
+- Spend analytics exclude investing-domain accounts by default; report and
+  trend endpoints accept `domain=` (single domain or `all`), and saved
+  reports persist it in `params.domain`. Net-worth cash sums spending+mixed
+  balances; investing accounts count via holdings only.
+- `GET /api/accounts` keeps holdings-derived balances for every account
+  with holdings: `test_accounts_balance_is_derived_from_holdings` pins that
+  behavior (a Checking account with holdings shows market value), so domain
+  governs analytics, not the accounts display.
+- Orders link one cash leg via `linked_transaction_id` (`e5f6a7b8c9d0`);
+  the leg is marked `transfer_id=order:<id>` so existing spend/recurring
+  exclusions pick it up. No mirror posting, no unlink endpoint yet — a
+  linked leg stays marked if the order is deleted (follow-up if needed).

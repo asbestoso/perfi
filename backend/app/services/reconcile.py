@@ -32,11 +32,16 @@ def _posted_merchant_map(db):
     return out
 
 
+MERGEABLE_KINDS = ("spend", "brokerage_cash")
+
+
 def _staged_tx(s, aid):
     return Transaction(account_id=aid, category_id=s.category_id,
                        amount_cents=s.amount_cents, merchant=s.merchant,
                        date=s.date, note=s.note,
                        category_source=s.category_source,
+                       transaction_kind=s.transaction_kind or "expense",
+                       import_batch_id=s.batch_id,
                        fingerprint=compute_fingerprint(
                            s.date, s.amount_cents, aid, s.merchant))
 
@@ -74,6 +79,12 @@ def classify_batch(db, batch_id):
 
     for s in pending:
         aid, fp = meta[s.id]
+        if s.row_kind == "trade":
+            held(s, "pending", ["trade: approve it as an order on the Import page"])
+            continue
+        if s.row_kind == "unknown":
+            held(s, "pending", [s.row_detail or "unknown activity: review before posting"])
+            continue
         if fp in seen:
             held(s, "pending", ["exact duplicate of another row in this batch"])
             continue
@@ -143,6 +154,10 @@ def merge_row(db, staging_id):
         raise HTTPException(status_code=404, detail="Not found")
     if s.status not in ("pending", "duplicate"):
         raise HTTPException(status_code=409, detail=f"already {s.status}")
+    if s.row_kind == "trade":
+        raise HTTPException(status_code=409, detail="trade rows approve as orders, not transactions")
+    if s.row_kind == "unknown":
+        raise HTTPException(status_code=409, detail="unknown rows need review before posting")
     if s.status == "pending" and transaction_exists(
             db, _row_account_id(s), s.date, s.amount_cents, s.merchant):
         raise HTTPException(status_code=409, detail="duplicate of an existing transaction")
@@ -178,15 +193,19 @@ def merge_batch(db, batch_id):
     merged, skipped = 0, 0
     done = set()
     for s in db.query(StagingRow).filter_by(batch_id=b.id, status="pending").all():
+        if s.row_kind not in MERGEABLE_KINDS:
+            skipped += 1
+            continue
         aid = _row_account_id(s)
         fp = compute_fingerprint(s.date, s.amount_cents, aid, s.merchant)
         if fp in done or transaction_exists(db, aid, s.date, s.amount_cents, s.merchant):
             skipped += 1
             continue
         done.add(fp)
-        db.add(_staged_tx(s, aid))
+        t = _staged_tx(s, aid)
+        db.add(t)
         s.status = "merged"
         merged += 1
     db.commit()
-    log.info(f"merge-all batch {batch_id}: merged={merged} skipped_dupes={skipped}")
+    log.info(f"merge-all batch {batch_id}: merged={merged} skipped={skipped}")
     return merged, skipped

@@ -6,6 +6,36 @@ from ..models import Account, Budget, Category, Holding, Recurring, Transaction
 
 log = get_log("analytics")
 
+#: Account domains that count as cash-side for spending views.
+CASH_DOMAINS = ("spending", "mixed")
+
+
+def _domain_filter(domain=None):
+    """Account-domain predicate for spend queries.
+
+    None means the default spending view (everything but investing);
+    "all" means no domain filter; otherwise equality on Account.domain.
+    Returns None when no predicate applies.
+    """
+    from ..models import Account
+    if domain == "all":
+        return None
+    if domain is None:
+        return Account.domain != "investing"
+    return Account.domain == domain
+
+
+def _cash_total(db):
+    """Cash-side balances: spending + mixed accounts only.
+
+    Investing accounts contribute no cash; their value comes from
+    holdings via portfolio_value, so counting their balance too would
+    double-count.
+    """
+    from ..models import Account
+    return db.scalar(select(func.coalesce(func.sum(Account.balance_cents), 0)).where(
+        Account.domain.in_(CASH_DOMAINS))) or 0
+
 
 def prev_month(month):
     y, m = int(month[:4]), int(month[5:7])
@@ -15,18 +45,20 @@ def prev_month(month):
     return f"{y:04d}-{m:02d}"
 
 
-def month_spent(db, category_id, month):
-    spent = db.scalar(
-        select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
-            Transaction.category_id == category_id,
+def month_spent(db, category_id, month, domain=None):
+    filt = [Transaction.category_id == category_id,
             func.strftime("%Y-%m", Transaction.date) == month,
             Transaction.transfer_id.is_(None),
-        )
-    ) or 0
+            Transaction.transaction_kind.in_(("expense", "income"))]
+    dom = _domain_filter(domain)
+    stmt = select(func.coalesce(func.sum(Transaction.amount_cents), 0))
+    if dom is not None:
+        stmt = stmt.join(Account, Transaction.account_id == Account.id).where(dom)
+    spent = db.scalar(stmt.where(*filt)) or 0
     return -min(spent, 0)
 
 
-def rolled_in(db, category_id, month):
+def rolled_in(db, category_id, month, domain=None):
     """Unused budget carried forward through consecutive rollover months."""
     carry, m, hops = 0, prev_month(month), 0
     while hops < 24:
@@ -34,7 +66,7 @@ def rolled_in(db, category_id, month):
             Budget.category_id == category_id, Budget.month == m))
         if prev is None or not prev.rollover:
             break
-        carry = max(0, prev.limit_cents + carry - month_spent(db, category_id, m))
+        carry = max(0, prev.limit_cents + carry - month_spent(db, category_id, m, domain))
         m, hops = prev_month(m), hops + 1
     return carry
 
@@ -57,11 +89,11 @@ def budget_pace(month, spent, effective):
     return expected, pace
 
 
-def budget_status(db, month):
+def budget_status(db, month, domain=None):
     out = []
     for b in db.scalars(select(Budget).where(Budget.month == month)).all():
-        spent = month_spent(db, b.category_id, month)
-        rolled = rolled_in(db, b.category_id, month)
+        spent = month_spent(db, b.category_id, month, domain)
+        rolled = rolled_in(db, b.category_id, month, domain)
         effective = b.limit_cents + rolled
         expected, pace = budget_pace(month, spent, effective)
         out.append({"budget_id": b.id, "category_id": b.category_id,
@@ -126,19 +158,20 @@ def portfolio_summary(db):
             "cost_cents": cost_total, "gain_cents": gain_total}
 
 
-def monthly_spend(db, month):
-    rows = db.execute(
-        select(Transaction.category_id, func.sum(Transaction.amount_cents))
-        .where(func.strftime("%Y-%m", Transaction.date) == month,
-               Transaction.transfer_id.is_(None))
-        .group_by(Transaction.category_id)
-    ).all()
+def monthly_spend(db, month, domain=None):
+    filt = [func.strftime("%Y-%m", Transaction.date) == month,
+            Transaction.transfer_id.is_(None),
+            Transaction.transaction_kind.in_(("expense", "income"))]
+    dom = _domain_filter(domain)
+    stmt = select(Transaction.category_id, func.sum(Transaction.amount_cents))
+    if dom is not None:
+        stmt = stmt.join(Account, Transaction.account_id == Account.id).where(dom)
+    rows = db.execute(stmt.where(*filt).group_by(Transaction.category_id)).all()
     return [{"category_id": cid, "total_cents": total} for cid, total in rows]
 
 
 def net_worth(db):
-    from ..models import Account
-    cash = db.scalar(select(func.coalesce(func.sum(Account.balance_cents), 0))) or 0
+    cash = _cash_total(db)
     inv = portfolio_value(db)
     return {"cash_cents": cash, "investments_cents": inv, "net_worth_cents": cash + inv}
 
@@ -196,11 +229,15 @@ CADENCES = (
 _WINDOWS = {c: (lo, hi) for c, lo, hi in CADENCES}
 
 
-def detect_recurring(db, min_occurrences=3):
+def detect_recurring(db, min_occurrences=3, domain=None):
     """Find repeat merchant+amount charges at regular intervals; upsert Recurring rows."""
     import datetime as dt
     groups = {}
-    for t in db.query(Transaction).filter(
+    q = db.query(Transaction).join(Account, Transaction.account_id == Account.id)
+    dom = _domain_filter(domain)
+    if dom is not None:
+        q = q.filter(dom)
+    for t in q.filter(
             Transaction.transfer_id.is_(None),
             Transaction.amount_cents != 0).order_by(Transaction.date).all():
         groups.setdefault((t.merchant.strip().lower(), t.amount_cents), []).append(t)
@@ -246,30 +283,42 @@ def month_list(n):
     return list(reversed(out))
 
 
-def monthly_trends(db, months=12):
+def monthly_trends(db, months=12, domain=None):
     out = []
+    dom = _domain_filter(domain)
     for month in month_list(months):
         filt = [func.strftime("%Y-%m", Transaction.date) == month,
                 Transaction.transfer_id.is_(None)]
-        income = db.scalar(select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
-            *filt, Transaction.amount_cents > 0)) or 0
-        expense = db.scalar(select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
-            *filt, Transaction.amount_cents < 0)) or 0
+        if dom is not None:
+            filt.append(dom)
+
+        def _sum(extra):
+            stmt = select(func.coalesce(func.sum(Transaction.amount_cents), 0))
+            if dom is not None:
+                stmt = stmt.join(Account, Transaction.account_id == Account.id)
+            return db.scalar(stmt.where(*filt, extra)) or 0
+
+        income = _sum(Transaction.amount_cents > 0)
+        expense = _sum(Transaction.amount_cents < 0)
         out.append({"month": month, "income_cents": income,
                     "expense_cents": -expense, "net_cents": income + expense})
     return out
 
 
-def category_trends(db, months=6):
+def category_trends(db, months=6, domain=None):
     wanted = month_list(months)
     cats = {c.id: c.name for c in db.query(Category).all()}
     cells = {}
+    filt = [func.strftime("%Y-%m", Transaction.date).in_(wanted),
+            Transaction.transfer_id.is_(None)]
+    dom = _domain_filter(domain)
+    stmt = select(Transaction.category_id,
+                  func.strftime("%Y-%m", Transaction.date),
+                  func.sum(Transaction.amount_cents))
+    if dom is not None:
+        stmt = stmt.join(Account, Transaction.account_id == Account.id).where(dom)
     rows = db.execute(
-        select(Transaction.category_id,
-               func.strftime("%Y-%m", Transaction.date),
-               func.sum(Transaction.amount_cents))
-        .where(func.strftime("%Y-%m", Transaction.date).in_(wanted),
-               Transaction.transfer_id.is_(None))
+        stmt.where(*filt)
         .group_by(Transaction.category_id,
                   func.strftime("%Y-%m", Transaction.date))
     ).all()
@@ -285,9 +334,9 @@ def category_trends(db, months=6):
 
 def snapshot_balances(db, day=None):
     import datetime as dt
-    from ..models import Account, BalanceSnapshot
+    from ..models import BalanceSnapshot
     day = day or dt.date.today()
-    cash = db.scalar(select(func.coalesce(func.sum(Account.balance_cents), 0))) or 0
+    cash = _cash_total(db)
     inv = portfolio_value(db)
     snap = db.query(BalanceSnapshot).filter_by(date=day).one_or_none()
     if snap is None:
@@ -316,16 +365,19 @@ def run_report(db, type, params):
     import datetime as dt
     from fastapi import HTTPException
     params = params or {}
+    domain = params.get("domain")
+    if domain is not None and domain != "all" and domain not in CASH_DOMAINS + ("investing",):
+        raise HTTPException(status_code=422, detail="Invalid report domain")
     if type == "spending":
         month = params.get("month") or dt.date.today().strftime("%Y-%m")
-        return {"month": month, "spend_by_category": monthly_spend(db, month),
-                "budgets": budget_status(db, month)}
+        return {"month": month, "spend_by_category": monthly_spend(db, month, domain),
+                "budgets": budget_status(db, month, domain)}
     if type == "trends":
-        return monthly_trends(db, params.get("months", 12))
+        return monthly_trends(db, params.get("months", 12), domain)
     if type == "net_worth":
         return net_worth_history(db)
     if type == "category_trends":
-        return category_trends(db, params.get("months", 6))
+        return category_trends(db, params.get("months", 6), domain)
     raise HTTPException(status_code=422, detail=f"unknown report type: {type}")
 
 

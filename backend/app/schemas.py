@@ -15,6 +15,7 @@ class Page(BaseModel, Generic[T]):
 class AccountCreate(BaseModel):
     name: str
     type: str = "checking"
+    domain: str = "spending"
     balance_cents: int = 0
 
 
@@ -25,6 +26,8 @@ class AccountRead(AccountCreate):
 
 class AccountUpdate(BaseModel):
     name: Optional[str] = None
+    type: Optional[str] = None
+    domain: Optional[str] = None
 
 
 class CategoryCreate(BaseModel):
@@ -45,6 +48,7 @@ class TransactionCreate(BaseModel):
     date: dt.date
     note: Optional[str] = None
     transfer_id: Optional[str] = None
+    transaction_kind: str = "expense"
 
 
 class TransactionRead(TransactionCreate):
@@ -59,6 +63,7 @@ class TransactionUpdate(BaseModel):
     date: Optional[dt.date] = None
     account_id: Optional[int] = None
     category_id: Optional[int] = None
+    transaction_kind: Optional[str] = None
 
 
 class CategoryUpdate(BaseModel):
@@ -91,11 +96,22 @@ class BatchRead(BaseModel):
     created_at: dt.datetime
     staged: int
     skipped: int
+    file_kind: str = "mixed"
+    status: str = "active"
+    rolled_back_at: Optional[dt.datetime] = None
     model_config = ConfigDict(from_attributes=True)
 
 
 class BatchDetailRead(BatchRead):
     by_status: dict[str, int]
+    by_kind: dict[str, int] = {}
+    mapping: dict = {}
+
+    @field_validator("mapping", mode="before")
+    @classmethod
+    def _parse_mapping(cls, v):
+        import json
+        return json.loads(v) if isinstance(v, str) else v
 
 
 class StagingRowRead(BaseModel):
@@ -109,6 +125,22 @@ class StagingRowRead(BaseModel):
     category_source: Optional[str] = None
     note: Optional[str] = None
     status: str
+    row_kind: str = "spend"
+    transaction_kind: str = "expense"
+    row_detail: str = ""
+    trade_json: dict = {}
+
+    @field_validator("trade_json", mode="before")
+    @classmethod
+    def _parse_trade_json(cls, v):
+        import json
+        if isinstance(v, str):
+            try:
+                return json.loads(v) if v else {}
+            except ValueError:
+                return {}
+        return v or {}
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -183,6 +215,7 @@ class OrderCreate(BaseModel):
     price_cents: int
     fees_cents: int = 0
     executed_at: dt.date
+    linked_transaction_id: Optional[int] = None
 
 
 class OrderRead(OrderCreate):

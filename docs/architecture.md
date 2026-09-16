@@ -29,6 +29,27 @@ CSV/OFX uploads never write transactions directly. They create an
 queue on the Import page, and merging (`services/reconcile.py`) inserts
 `Transaction`s.
 
+- **Intake gate**: `POST /api/import/scan` dry-runs a CSV (detection +
+  proposed mapping + samples + per-kind counts, zero writes). New header
+  layouts confirm mapping + file kind (Mixed / Brokerage only / Spending
+  only) on the Import page; known layouts reuse the remembered mapping
+  from localStorage. Headers match by normalized alias
+  (`services/profiles.py`), not exact strings.
+- **Row kinds**: every staged row is `spend`, `brokerage_cash`, `trade`,
+  or `unknown` (`services/classify.py`, mode-gated by the batch's
+  file_kind). Spend and brokerage cash merge normally (cash rows carry a
+  capital-flow kind); trades and unknowns never merge — trades approve
+  into orders, unknowns wait for review or discard.
+- **New accounts**: brokerage-context rows create investing-group
+  accounts; existing accounts are never re-grouped by import.
+- **Trade approval**: `POST .../approve-trade` creates the order + lot +
+  holding via `services/orders.py`, idempotent on an order fingerprint
+  (double approval and re-uploads collapse to the same order).
+- **Funded buys**: `services/funding.py` links a checking→brokerage
+  deposit to the buy it funded on exact principal match inside 14 days
+  (auto on approval when unambiguous, suggestions + explicit link
+  otherwise, undo via `DELETE /investment-orders/{id}/link`).
+
 - **Fingerprint** (`services/fingerprint.py`, stored + indexed on
   `transactions.fingerprint`): sha256 of account + date + signed amount +
   tightly normalized merchant. Exact hits stage as `duplicate` rows held for
@@ -50,9 +71,23 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
   rollover; `budget_status` returns limit/spent/remaining/pace per row.
 - **Investments**: `Holding`s carry live price/qty; `InvestmentLot`s carry tax
   lots. Lots CSV import is idempotent on (symbol, qty, cost, acquired) and
-  rejects missing cost basis instead of defaulting $0.
-- **Snapshots**: `POST /api/snapshots/run` records cash/investments/net-worth;
-  history chart needs at least one snapshot — nothing is scheduled.
+  rejects missing cost basis instead of defaulting $0. `InvestmentOrder`s
+  record buys/sells (FIFO lot relief) and may link one cash `Transaction`
+  via `linked_transaction_id`; the linked leg gets `transfer_id=order:<id>`
+  so it leaves spend totals.
+- **Domains**: every `Account` has a `domain` (`spending` | `investing` |
+  `mixed`; backfilled from type, user-overridable). Spend queries
+  (`month_spent`, `monthly_spend`, `monthly_trends`, `category_trends`,
+  `budget_status`, `detect_recurring`) exclude investing-domain accounts by
+  default and accept `domain=` (`spending` view, a single domain, or `all`).
+  A second axis, `Transaction.transaction_kind` (`expense`, `income`,
+  `investment_contribution`, `investment_distribution`), keeps capital flows
+  out of spend even when the domain is widened.
+- **Net worth**: cash sums `spending` + `mixed` balances only — investing
+  accounts contribute via holdings (`portfolio_value`), never via balance,
+  so the two sides can't double-count. `POST /api/snapshots/run` records
+  the same split; history chart needs at least one snapshot — nothing is
+  scheduled.
 
 ## Secrets
 
@@ -64,6 +99,11 @@ with `hmac.compare_digest`.
 ## Frontend map
 
 `main.tsx` owns nav + the `api()` helper (throws on non-2xx, parses JSON).
-`pages/_shared.tsx` owns `Page`, `Card`, `useGet`, `dollars`, input/button
-classes. Pages are otherwise independent; after a mutation they bump a `tick`
-state appended to the query string to refetch (same pattern as Import).
+The sidebar groups links into Overview / Spending / Investing / Manage
+(top bar stays flat). `pages/_shared.tsx` owns `Page`, `Card`, `useGet`,
+`dollars`, input/button classes. Pages are otherwise independent; after a
+mutation they bump a `tick` state appended to the query string to refetch
+(same pattern as Import). Dashboard is the combined overview (net worth +
+spending + portfolio cards with drill links); Import has Bank statements /
+Brokerage tabs; Reports and Transactions carry a Group (domain) selector
+and saved reports store `params.domain`.

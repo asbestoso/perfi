@@ -24,7 +24,8 @@ def test_import_stages_categorized_rows(db):
     raw = b"date,merchant,amount\n2026-01-05,Whole Foods,-12.34\n2026-01-06,Starbucks,-5.50\n"
     result = import_csv(db, 1, raw)
     assert result == {"batch_id": 1, "staged": 2, "skipped": 0,
-                      "accounts": ["Checking"], "new_categories": []}
+                      "accounts": ["Checking"], "new_categories": [],
+                      "file_kind": "mixed", "by_kind": {"spend": 2}}
     assert db.query(models.Transaction).count() == 0  # nothing merged yet
     rows = db.query(models.StagingRow).order_by(models.StagingRow.id).all()
     names = {c.id: c.name for c in db.query(models.Category).all()}
@@ -37,7 +38,8 @@ def test_import_stages_categorized_rows(db):
 def test_import_holds_duplicates_and_skips_bad_rows(db):
     raw = b"date,merchant,amount\n2026-01-05,Whole Foods,-12.34\n2026-01-05,Whole Foods,-12.34\n,,\n"
     assert import_csv(db, 1, raw) == {"batch_id": 1, "staged": 2, "skipped": 1,
-                                      "accounts": ["Checking"], "new_categories": []}
+                                      "accounts": ["Checking"], "new_categories": [],
+                                      "file_kind": "mixed", "by_kind": {"spend": 2}}
     rows = db.query(models.StagingRow).order_by(models.StagingRow.id).all()
     assert [r.status for r in rows] == ["pending", "duplicate"]
     again = import_csv(db, 1, raw)
@@ -86,7 +88,8 @@ def test_mint_profile(store, client):
     r = _upload(client, acct, MINT_CSV, profile="mint", name="mint.csv")
     assert r.status_code == 200, r.text
     assert r.json() == {"batch_id": 1, "staged": 2, "skipped": 0,
-                        "accounts": ["Checking"], "new_categories": []}
+                        "accounts": ["Checking"], "new_categories": [],
+                        "file_kind": "mixed", "by_kind": {"spend": 2}}
     rows = client.get("/api/import/batches/1/rows").json()
     assert rows["total"] == 2
     by_merchant = {t["merchant"]: t for t in rows["items"]}
@@ -149,12 +152,32 @@ def test_reimport_after_merge_holds_duplicate(store, client):
     client.post("/api/import/batches/1/merge-all")
     r = _upload(client, acct, body)
     assert r.json() == {"batch_id": 2, "staged": 1, "skipped": 0,
-                        "accounts": ["Checking"], "new_categories": []}
+                        "accounts": ["Checking"], "new_categories": [],
+                        "file_kind": "mixed", "by_kind": {"spend": 1}}
     rows = client.get("/api/import/batches/2/rows").json()
     assert rows["total"] == 1 and rows["items"][0]["status"] == "duplicate"
     # merge-all leaves held duplicates alone; nothing double-posts
     assert client.post("/api/import/batches/2/merge-all").json() == {"ok": True, "merged": 0}
     assert client.get("/api/transactions").json()["total"] == 1
+
+
+def test_import_batch_can_be_rolled_back(store, client):
+    acct = store["acct"]
+    body = b"date,merchant,amount\n2026-01-05,A,-100\n"
+    result = _upload(client, acct, body)
+    batch_id = result.json()["batch_id"]
+    assert client.post(f"/api/import/batches/{batch_id}/merge-all").json()["merged"] == 1
+    assert client.get("/api/transactions").json()["total"] == 1
+
+    rollback = client.post(f"/api/import/batches/{batch_id}/rollback")
+    assert rollback.status_code == 200
+    assert rollback.json() == {
+        "ok": True, "batch_id": batch_id, "transactions": 1,
+        "investment_orders": 0,
+    }
+    assert client.get("/api/transactions").json()["total"] == 0
+    assert client.get(f"/api/import/batches/{batch_id}").json()["status"] == "rolled_back"
+    assert client.post(f"/api/import/batches/{batch_id}/rollback").status_code == 409
 
 
 def test_merge_refuses_preexisting_duplicate(store, client):

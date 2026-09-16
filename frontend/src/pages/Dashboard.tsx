@@ -32,16 +32,44 @@ export default function Dashboard() {
   }));
   const budgets = report?.budgets || [];
   const net = report?.net_worth;
+  const spendRows = report?.spend_by_category || [];
+  const monthSpend = spendRows
+    .map((s: any) => Number(s.total_cents || 0))
+    .filter((n: number) => n < 0)
+    .reduce((a: number, n: number) => a - n, 0);
+  const overCount = budgets.filter((b: any) => b.pace === "over").length;
 
   return (
     <Page title="Dashboard">
       {net != null && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <Stat label="Net worth">{dollars(net.net_worth_cents)}</Stat>
-          <Stat label="Cash">{dollars(net.cash_cents)}</Stat>
-          <Stat label="Investments">{dollars(net.investments_cents)}</Stat>
+          <Stat label="Spending cash">{dollars(net.cash_cents)}</Stat>
+          <Stat label="Portfolio">{dollars(net.investments_cents)}</Stat>
         </div>
       )}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <Card title={`Spending · ${month}`}>
+          <p className="text-2xl font-semibold tabular-nums">{dollars(monthSpend)}</p>
+          <p className="mt-1 text-sm text-slate-500">
+            spent across {spendRows.length} categor{spendRows.length === 1 ? "y" : "ies"}
+            {overCount > 0 && ` · ${overCount} budget${overCount === 1 ? "" : "s"} over`}
+            {" "}· investing accounts excluded
+          </p>
+          <a href="/transactions" className="mt-2 inline-block text-sm font-medium text-pine-700 hover:underline">
+            Open spending →
+          </a>
+        </Card>
+        <Card title="Investing">
+          <p className="text-2xl font-semibold tabular-nums">{dollars(net?.investments_cents)}</p>
+          <p className="mt-1 text-sm text-slate-500">
+            portfolio market value · never counted as spending
+          </p>
+          <a href="/investments" className="mt-2 inline-block text-sm font-medium text-pine-700 hover:underline">
+            Open portfolio →
+          </a>
+        </Card>
+      </div>
       <Card title="Net worth history">
         {histRows.length > 0 ? (
           <ResponsiveContainer width="100%" height={220}>
@@ -57,7 +85,7 @@ export default function Dashboard() {
           <p className="text-sm text-slate-500">No snapshots yet — run <code>POST /api/snapshots/run</code> to start the series.</p>
         )}
       </Card>
-      <Card title="Income vs expense (6 mo)">
+      <Card title="Income vs expense (6 mo)" hint="Cash-side accounts only — investing moves never appear here.">
         {trendRows.length > 0 ? (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={trendRows} barCategoryGap="28%">
