@@ -6,7 +6,8 @@ import json
 from sqlalchemy import select
 
 from ..logging_setup import get as get_log
-from ..models import Account, Category, CategoryRule, ImportBatch, StagingRow, Transaction
+from ..models import (Account, Category, CategoryRule, Holding, ImportAccountMapping,
+                      ImportBatch, StagingRow, Transaction)
 from .categorization import resolve_category
 from .classify import FILE_KINDS, classify
 from .fingerprint import compute_fingerprint
@@ -191,6 +192,8 @@ def import_csv(db, account_id, raw, profile="generic", filename="",
     from .classify import normalize_mapped
     text = raw.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
+    if profile == "Holding":
+        return import_holdings(db, account_id, reader, filename, mapping)
     parsed, skipped = [], 0
     for row in reader:
         if mapping:
@@ -211,3 +214,106 @@ def import_csv(db, account_id, raw, profile="generic", filename="",
         {"skipped": result["skipped"]}, synchronize_session=False)
     db.commit()
     return result
+
+
+def import_holdings(db, account_id, reader, filename, mapping=None):
+    from fastapi import HTTPException
+    mapping = mapping or {}
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=422, detail="holding CSV is empty")
+    excluded_accounts = set(mapping.get("excluded_accounts", []))
+    excluded_rows = {int(value) for value in mapping.get("excluded_rows", [])}
+    active_rows = [
+        row for index, row in enumerate(rows)
+        if index not in excluded_rows
+        and (row.get(mapping.get("account", "Account")) or "").strip()
+        not in excluded_accounts
+    ]
+    labels = sorted({(row.get(mapping.get("account", "Account")) or "").strip()
+                     for row in active_rows})
+    labels = [label for label in labels if label]
+    saved = {
+        item.external_label: item.account_id
+        for item in db.query(ImportAccountMapping).filter_by(profile="Holding").all()
+    }
+    unresolved = []
+    resolved = {}
+    for label in labels:
+        target = account_id or saved.get(label)
+        if target is None:
+            unresolved.append(label)
+        else:
+            if db.get(Account, target) is None:
+                raise HTTPException(status_code=422, detail=f"unknown account id for {label}")
+            resolved[label] = target
+    supplied = mapping.get("accounts", {})
+    for label, target in supplied.items():
+        if label in labels:
+            target = int(target)
+            if db.get(Account, target) is None:
+                raise HTTPException(status_code=422, detail=f"unknown account id for {label}")
+            resolved[label] = target
+            if label in unresolved:
+                unresolved.remove(label)
+    if unresolved:
+        raise HTTPException(status_code=409, detail={
+            "message": "account mapping required",
+            "accounts": unresolved,
+            "available_accounts": [
+                {"id": a.id, "name": a.name}
+                for a in db.query(Account).order_by(Account.name).all()
+            ],
+        })
+    batch = ImportBatch(profile="Holding", filename=filename or "",
+                        file_kind="brokerage", mapping=json.dumps(mapping))
+    db.add(batch)
+    db.flush()
+    changed = 0
+    seen = set()
+    previous = []
+    for row in active_rows:
+        label = (row.get(mapping.get("account", "Account")) or "").strip()
+        symbol = (row.get(mapping.get("symbol", "Holding")) or "").strip().upper()
+        quantity_raw = (row.get(mapping.get("quantity", "Quantity")) or "").strip()
+        if not label or not symbol or not quantity_raw:
+            raise HTTPException(status_code=422, detail="holding rows require Account, Holding, and Quantity")
+        try:
+            quantity = round(float(quantity_raw.replace(",", "")) * 1000)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"invalid quantity for {symbol}")
+        if quantity < 0:
+            raise HTTPException(status_code=422, detail=f"negative quantity for {symbol}")
+        aid = resolved[label]
+        key = (aid, symbol)
+        if key in seen:
+            raise HTTPException(status_code=422, detail=f"duplicate holding row for {label} / {symbol}")
+        seen.add(key)
+        holding = db.query(Holding).filter_by(account_id=aid, symbol=symbol).one_or_none()
+        if holding is None:
+            holding = Holding(account_id=aid, symbol=symbol, quantity_milli=quantity,
+                              import_batch_id=batch.id)
+            db.add(holding)
+        else:
+            previous.append({
+                "account_id": aid, "symbol": symbol, "quantity_milli": holding.quantity_milli,
+                "name": holding.name, "price_cents": holding.price_cents,
+                "import_batch_id": holding.import_batch_id,
+            })
+            holding.quantity_milli = quantity
+            holding.import_batch_id = batch.id
+        changed += 1
+        existing = db.query(ImportAccountMapping).filter_by(
+            profile="Holding", external_label=label).one_or_none()
+        if existing is None:
+            db.add(ImportAccountMapping(profile="Holding",
+                                        external_label=label, account_id=aid))
+        else:
+            existing.account_id = aid
+    batch.mapping = json.dumps({**mapping, "_holding_previous": previous})
+    batch.staged = len(active_rows)
+    batch.skipped = len(rows) - len(active_rows)
+    db.commit()
+    return {"batch_id": batch.id, "staged": len(active_rows), "updated": changed,
+            "skipped": len(rows) - len(active_rows), "accounts": sorted(labels),
+            "file_kind": "brokerage", "by_kind": {"holding": len(active_rows)}}

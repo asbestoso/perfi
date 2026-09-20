@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from app import models
 from app.database import Base
 from app.services.csv_import import import_csv
+from app.services.import_rollback import rollback_batch
 
 
 @pytest.fixture
@@ -33,6 +34,101 @@ def test_import_stages_categorized_rows(db):
     assert names[rows[0].category_id] == "Groceries"
     assert rows[0].category_source == "rule"
     assert names[rows[1].category_id] == "Dining"
+
+
+def test_holding_profile_requires_and_persists_account_mapping(db):
+    raw = b"Account,Holding,Quantity\nBrokerage Alpha,VTI,12.5\n"
+    with pytest.raises(Exception) as exc:
+        import_csv(db, None, raw, profile="Holding")
+    assert "account mapping required" in str(exc.value)
+    result = import_csv(db, None, raw, profile="Holding",
+                        mapping={"accounts": {"Brokerage Alpha": 1}})
+    assert result["updated"] == 1
+    holding = db.query(models.Holding).one()
+    assert holding.account_id == 1 and holding.quantity_milli == 12500
+    again = import_csv(db, None, raw, profile="Holding")
+    assert again["updated"] == 1
+    assert db.query(models.Holding).count() == 1
+
+
+def test_holding_scan_returns_external_accounts_and_saved_mapping(store, client):
+    client.post("/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+                files={"file": ("holdings.csv", b"Account,Holding,Quantity\nBrokerage Alpha,VTI,1\n",
+                                "text/csv")})
+    response = client.post(
+        "/api/import/holdings/scan",
+        files={"file": ("holdings.csv",
+                         b"Account,Holding,Quantity\nBrokerage Alpha,VTI,1\nBrokerage Beta,VOO,2\n",
+                         "text/csv")},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["label"] for item in body["external_accounts"]] == [
+        "Brokerage Alpha", "Brokerage Beta"
+    ]
+    assert body["external_accounts"][0]["saved_account_id"] == 1
+    assert body["external_accounts"][1]["saved_account_id"] is None
+    assert body["rows"][0]["known"] is True
+    assert body["rows"][1]["known"] is False
+
+
+def test_holding_import_can_skip_accounts_and_rows(db):
+    raw = (
+        b"Account,Holding,Quantity\n"
+        b"Keep,VTI,12.5\n"
+        b"Keep,NOTREAL,2\n"
+        b"Skip,VOO,4\n"
+    )
+    db.add(models.Account(name="Skip", type="brokerage", balance_cents=0))
+    db.commit()
+    result = import_csv(
+        db, None, raw, profile="Holding",
+        mapping={
+            "accounts": {"Keep": 1},
+            "excluded_accounts": ["Skip"],
+            "excluded_rows": [1],
+        },
+    )
+    assert result["updated"] == 1
+    assert result["skipped"] == 2
+    assert [(h.symbol, h.quantity_milli) for h in db.query(models.Holding).all()] == [
+        ("VTI", 12500)
+    ]
+
+
+def test_holding_batch_reports_committed_changes(store, client):
+    response = client.post(
+        "/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+        files={"file": (
+            "holdings.csv",
+            b"Account,Holding,Quantity\nBrokerage Alpha,VTI,12.5\n",
+            "text/csv",
+        )},
+    )
+    assert response.status_code == 200
+    batch_id = response.json()["batch_id"]
+    batches = client.get("/api/import/batches").json()["items"]
+    batch = next(item for item in batches if item["id"] == batch_id)
+    assert batch["committed"] == 1
+    detail = client.get(f"/api/import/batches/{batch_id}").json()
+    assert detail["committed"] == 1
+
+
+def test_holding_import_rollback_restores_previous_quantity(db):
+    db.add(models.Holding(account_id=1, symbol="VTI", quantity_milli=10000,
+                          name="Vanguard Total Stock", price_cents=25000))
+    db.commit()
+    result = import_csv(
+        db, None, b"Account,Holding,Quantity\nBrokerage Alpha,VTI,12.5\n",
+        profile="Holding", mapping={"accounts": {"Brokerage Alpha": 1}},
+    )
+    assert db.query(models.Holding).one().quantity_milli == 12500
+    rollback = rollback_batch(db, result["batch_id"])
+    assert rollback["holdings"] == 1
+    restored = db.query(models.Holding).one()
+    assert restored.quantity_milli == 10000
+    assert restored.name == "Vanguard Total Stock"
+    assert restored.price_cents == 25000
 
 
 def test_import_holds_duplicates_and_skips_bad_rows(db):
@@ -204,54 +300,6 @@ def test_same_charge_on_two_accounts_stages_twice(store, client):
                     files={"file": ("s.csv", body, "text/csv")})
     assert r.status_code == 200, r.text
     assert r.json()["staged"] == 2 and r.json()["skipped"] == 0
-
-
-OFX_DOC = """OFXHEADER:100
-DATA:OFXSGML
-VERSION:102
-<OFX>
-<BANKMSGSRSV1>
-<STMTTRNRS>
-<STMTRS>
-<BANKTRANLIST>
-<STMTTRN>
-<DTPOSTED>20260105
-<TRNAMT>-12.34
-<FITID>1
-<NAME>WHOLE FOODS
-<MEMO>GROCERIES
-</STMTTRN>
-<STMTTRN>
-<DTPOSTED>20260106
-<TRNAMT>2000.00
-<FITID>2
-<NAME>ACME PAYROLL
-</STMTTRN>
-<STMTTRN>
-<DTPOSTED>BADDATA
-<TRNAMT>-5.00
-<FITID>3
-<NAME>BROKEN
-</STMTTRN>
-</BANKTRANLIST>
-</STMTRS>
-</STMTTRNRS>
-</BANKMSGSRSV1>
-</OFX>
-"""
-
-
-def test_ofx_import(store, client):
-    acct = store["acct"]
-    r = client.post(f"/api/import/ofx?account_id={acct}",
-                    files={"file": ("stmt.ofx", OFX_DOC, "application/x-ofx")})
-    assert r.status_code == 200, r.text
-    assert r.json()["staged"] == 2
-    rows = client.get("/api/import/batches/1/rows").json()["items"]
-    by_merchant = {t["merchant"]: t for t in rows}
-    assert by_merchant["WHOLE FOODS GROCERIES"]["amount_cents"] == -1234
-    assert by_merchant["ACME PAYROLL"]["amount_cents"] == 200000
-    assert client.post("/api/import/batches/1/merge-all").json()["merged"] == 2
 
 
 def test_accounts_mapped_by_name_and_created(store, client):

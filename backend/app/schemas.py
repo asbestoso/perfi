@@ -41,7 +41,7 @@ class CategoryRead(CategoryCreate):
 
 
 class TransactionCreate(BaseModel):
-    account_id: int
+    account_id: Optional[int] = None
     category_id: Optional[int] = None
     amount_cents: int
     merchant: str = ""
@@ -92,10 +92,11 @@ class BatchRead(BaseModel):
     id: int
     profile: str
     filename: str
-    account_id: int
+    account_id: Optional[int] = None
     created_at: dt.datetime
     staged: int
     skipped: int
+    committed: int = 0
     file_kind: str = "mixed"
     status: str = "active"
     rolled_back_at: Optional[dt.datetime] = None

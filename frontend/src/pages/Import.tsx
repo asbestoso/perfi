@@ -117,36 +117,81 @@ function kindSummary(counts: any) {
 }
 
 function UploadForm({ onDone }: any) {
-  const [profile, setProfile] = useState("empower");
-  const [kind, setKind] = useState("csv");
+  const [profile, setProfile] = useState("Holding");
   const [msg, setMsg] = useState("");
+  const [holdingFile, setHoldingFile] = useState<any>(null);
+  const [holdingAccounts, setHoldingAccounts] = useState<any[]>([]);
+  const [holdingLabels, setHoldingLabels] = useState<any[]>([]);
+  const [holdingRows, setHoldingRows] = useState<any[]>([]);
+  const [holdingMapping, setHoldingMapping] = useState<Record<string, string>>({});
+  const [discardedHoldingAccounts, setDiscardedHoldingAccounts] = useState<Set<string>>(new Set());
+  const [discardedHoldingRows, setDiscardedHoldingRows] = useState<Set<number>>(new Set());
+  const [holdingScanning, setHoldingScanning] = useState(false);
+  const [holdingImporting, setHoldingImporting] = useState(false);
   async function submit(e: any) {
     e.preventDefault();
     setMsg("Uploading…");
     const file = e.target.elements.file.files[0];
     if (!file) { setMsg("Pick a file first."); return; }
-    if (kind === "ofx") {
+    if (profile === "Holding") {
       try {
-        const r = await api("/api/import/ofx", { method: "POST", body: ofxData(file) });
-        const merged = await api(`/api/import/batches/${r.batch_id}/merge-safe`, { method: "POST" });
-        setMsg(`Added ${merged.merged} automatically, held ${merged.held.length} for review (batch ${r.batch_id}).`);
-        onDone(r.batch_id);
-      } catch (err: any) {
-        setMsg(`Failed: ${err.message}`);
-      }
+        setHoldingScanning(true);
+        const fd = new FormData();
+        fd.append("file", file);
+        const result = await api("/api/import/holdings/scan", { method: "POST", body: fd });
+        setHoldingFile(file);
+        setHoldingAccounts(result.accounts || []);
+        setHoldingLabels(result.external_accounts || []);
+        setHoldingRows(result.rows || []);
+        setHoldingMapping(Object.fromEntries(
+          (result.external_accounts || [])
+            .filter((item: any) => item.saved_account_id != null)
+            .map((item: any) => [item.label, String(item.saved_account_id)])
+        ));
+        setMsg("");
+      } catch (err: any) { setMsg(`Could not read that holdings file: ${err.message}`); }
+      finally { setHoldingScanning(false); }
       return;
     }
     setPendingFile(file);
     setMsg("");
     await runScan(file);
   }
-  function ofxData(file: any) {
-    const fd = new FormData();
-    fd.append("file", file);
-    return fd;
-  }
 
-  // CSV confirm flow state below (OFX uploads skip confirmation).
+  async function importHoldings() {
+    const activeLabels = holdingLabels.filter((item) => !discardedHoldingAccounts.has(item.label));
+    const activeRows = holdingRows.filter((row) =>
+      !discardedHoldingAccounts.has(row.account) && !discardedHoldingRows.has(row.id)
+    );
+    if (!holdingFile || activeLabels.some((item) => !holdingMapping[item.label])) {
+      setMsg("Choose a local account for every account you are importing, or choose Skip.");
+      return;
+    }
+    if (activeRows.length === 0) {
+      setMsg("Choose at least one holding to import.");
+      return;
+    }
+    setHoldingImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", holdingFile);
+      const mapping = { accounts: Object.fromEntries(
+        activeLabels.map((item: any) => [item.label, Number(holdingMapping[item.label])])
+      ), excluded_accounts: [...discardedHoldingAccounts],
+      excluded_rows: [...discardedHoldingRows]};
+      const r = await api(`/api/import/csv?profile=Holding&mapping=${encodeURIComponent(JSON.stringify(mapping))}`,
+        { method: "POST", body: fd });
+      setMsg(`Committed ${r.updated} holdings across ${r.accounts.length} accounts` +
+        `${r.skipped ? `; skipped ${r.skipped}` : ""} (batch ${r.batch_id}).`);
+      setHoldingFile(null);
+      setHoldingRows([]);
+      setDiscardedHoldingAccounts(new Set());
+      setDiscardedHoldingRows(new Set());
+      onDone(r.batch_id);
+    } catch (err: any) { setMsg(`Failed: ${err.message}`); }
+    finally { setHoldingImporting(false); }
+  }
+  // CSV confirmation flow state.
   const [pendingFile, setPendingFile] = useState<any>(null);
   const [scan, setScan] = useState<any>(null);
   const [mapping, setMapping] = useState<any>(null);
@@ -240,26 +285,110 @@ function UploadForm({ onDone }: any) {
   return (
     <div className="space-y-3">
       <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-        <label className="text-sm">Type
-          <select value={kind} onChange={(e) => { setKind(e.target.value); reset(); }} className={`${inputCls} ml-1`}>
-            <option value="csv">CSV</option>
-            <option value="ofx">OFX</option>
+        <label className="text-sm">Profile
+          <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${inputCls} ml-1`}>
+            <option value="Holding">Holding</option>
+            <option value="empower">Empower</option>
+            <option value="mint">Mint</option>
           </select>
         </label>
-        {kind === "csv" && (
-          <label className="text-sm">Profile
-            <select value={profile} onChange={(e) => setProfile(e.target.value)} className={`${inputCls} ml-1`}>
-              <option value="empower">Empower</option>
-              <option value="mint">Mint</option>
-            </select>
-          </label>
-        )}
-        <input name="file" type="file" accept={kind === "csv" ? ".csv" : ".ofx,.qfx"} className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
-        <button className={btnCls}>{kind === "ofx" ? "Upload" : scanning ? "Scanning…" : "Scan file"}</button>
+        <input name="file" type="file" accept=".csv" className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
+        <button className={btnCls}>
+          {profile === "Holding" ? (holdingScanning ? "Reading…" : "Review accounts") : scanning ? "Scanning…" : "Scan file"}
+        </button>
         {msg && <span className="text-sm text-slate-600">{msg}</span>}
       </form>
 
-      {kind === "csv" && scan && pendingFile && (
+      {profile === "Holding" && holdingFile && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+          <div className="mb-3">
+            <h3 className="font-medium text-slate-800">Map imported accounts</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Choose the account in Perfi that corresponds to each account in this file.
+              Saved matches are preselected for future imports.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {holdingLabels.map((item: any) => (
+              <div key={item.label} className="grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center sm:gap-3">
+                <span className={`truncate font-medium ${discardedHoldingAccounts.has(item.label) ? "text-slate-400 line-through" : "text-slate-700"}`} title={item.label}>{item.label}</span>
+                <select
+                  value={holdingMapping[item.label] || ""}
+                  disabled={discardedHoldingAccounts.has(item.label)}
+                  onChange={(e) => setHoldingMapping((current) => ({ ...current, [item.label]: e.target.value }))}
+                  className={inputCls}
+                >
+                  <option value="">Select a Perfi account…</option>
+                  {holdingAccounts.map((account: any) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name} · {account.type}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={btnSecCls}
+                  onClick={() => setDiscardedHoldingAccounts((current) => {
+                    const next = new Set(current);
+                    if (next.has(item.label)) next.delete(item.label); else next.add(item.label);
+                    return next;
+                  })}
+                >
+                  {discardedHoldingAccounts.has(item.label) ? "Include" : "Skip account"}
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5 border-t border-slate-200 pt-4">
+            <h4 className="mb-2 text-sm font-medium text-slate-700">Holdings to import</h4>
+            <div className="space-y-1">
+              {holdingRows.filter((row: any) => !row.known).map((row: any) => {
+                const accountSkipped = discardedHoldingAccounts.has(row.account);
+                const rowSkipped = discardedHoldingRows.has(row.id);
+                const skipped = accountSkipped || rowSkipped;
+                return (
+                  <div key={row.id} className={`grid gap-1 text-sm sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center sm:gap-3 ${skipped ? "text-slate-400" : "text-slate-600"}`}>
+                    <span className={skipped ? "line-through" : ""}>
+                      {row.symbol || "(missing symbol)"} · {row.account || "(missing account)"}
+                    </span>
+                    <span>{row.quantity || "(missing quantity)"}</span>
+                    <button
+                      type="button"
+                      disabled={accountSkipped}
+                      className={btnSecCls}
+                      onClick={() => setDiscardedHoldingRows((current) => {
+                        const next = new Set(current);
+                        if (next.has(row.id)) next.delete(row.id); else next.add(row.id);
+                        return next;
+                      })}
+                    >
+                      {rowSkipped ? "Include" : "Skip holding"}
+                    </button>
+                  </div>
+                );
+              })}
+              {holdingRows.every((row: any) => row.known) && (
+                <p className="text-sm text-slate-500">
+                  All symbols in this file are already known. Existing holdings will still be refreshed.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button onClick={importHoldings} disabled={holdingImporting} className={btnCls}>
+              {holdingImporting ? "Importing…" : "Import holdings"}
+            </button>
+            <button onClick={() => setHoldingFile(null)} disabled={holdingImporting} className={btnSecCls}>
+              Cancel
+            </button>
+            <span className="text-xs text-slate-500">
+              {holdingLabels.length} external account{holdingLabels.length === 1 ? "" : "s"} found
+            </span>
+          </div>
+        </div>
+      )}
+
+      {profile !== "Holding" && scan && pendingFile && (
         <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
           {recognized ? (
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -354,9 +483,13 @@ function BatchList({ active, onSelect, tick }: any) {
               active === b.id ? "bg-pine-100/60 font-semibold" : "hover:bg-slate-50"
             }`}
           >
-            <span>#{b.id} {b.filename || "(upload)"} · {b.profile} · {b.file_kind}</span>
+            <span>
+              #{b.id} · {new Date(b.created_at).toLocaleString()} · {b.filename || "(upload)"}
+              <span className="text-slate-500"> · {b.profile}</span>
+            </span>
             <span className="flex items-center gap-2 text-slate-500 tabular-nums">
-              staged {b.staged} · skipped {b.skipped}
+              {b.committed} committed · {b.skipped} skipped
+              {b.status === "rolled_back" && " · rolled back"}
             </span>
           </button>
         </li>
@@ -632,7 +765,9 @@ function BatchSummary({ batchId, tick, onChange }: any) {
   }
   return (
     <div className="mb-2 flex flex-wrap items-center gap-3 text-sm text-slate-500">
-      <span>{data.file_kind} file · {kindSummary(data.by_kind)}
+      <span>
+        {new Date(data.created_at).toLocaleString()} · {data.profile} · {data.file_kind} file ·
+        {data.committed} committed
         {data.skipped > 0 && ` · ${data.skipped} skipped`}
         {data.status === "rolled_back" && " · rolled back"}
       </span>

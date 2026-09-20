@@ -14,7 +14,6 @@ from ...services import ai_provider, analytics, mcp_server, reconcile, settings_
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
 from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
-from ...services.ofx_import import import_ofx
 from ...services.profiles import detect_source, header_signature, propose_mapping, unmapped_columns
 
 router = APIRouter()
@@ -283,13 +282,57 @@ def csv_import(file: UploadFile, account_id=None, profile="empower",
                       file_kind, parsed_mapping)
 
 
-@router.post("/import/ofx")
-def ofx_import(file: UploadFile, account_id=None, db=Depends(get_db)):
-    aid = None
-    if account_id is not None:
-        aid = _as_int(account_id, "account_id")
-        _get_or_404(db, models.Account, aid)
-    return import_ofx(db, aid, file.file.read(), file.filename or "")
+@router.post("/import/holdings/scan")
+def holdings_import_scan(file: UploadFile, db=Depends(get_db)):
+    import csv as csvmod
+    import io
+    try:
+        text = file.file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="file must be UTF-8 CSV")
+    reader = csvmod.DictReader(io.StringIO(text))
+    required = {"Account", "Holding", "Quantity"}
+    headers = set(reader.fieldnames or [])
+    if not required.issubset(headers):
+        raise HTTPException(status_code=422,
+                            detail="holding CSV must contain Account, Holding, and Quantity columns")
+    rows = []
+    labels = set()
+    known_symbols = {
+        holding.symbol.upper()
+        for holding in db.query(models.Holding).all()
+        if holding.symbol
+    }
+    for index, row in enumerate(reader):
+        label = (row.get("Account") or "").strip()
+        symbol = (row.get("Holding") or "").strip().upper()
+        if label:
+            labels.add(label)
+        rows.append({
+            "id": index,
+            "account": label,
+            "symbol": symbol,
+            "quantity": (row.get("Quantity") or "").strip(),
+            "known": symbol in known_symbols,
+        })
+    saved = {
+        item.external_label: item.account_id
+        for item in db.query(models.ImportAccountMapping).filter_by(profile="Holding").all()
+    }
+    accounts = [
+        {"id": account.id, "name": account.name, "type": account.type,
+         "domain": account.domain}
+        for account in db.query(models.Account).order_by(models.Account.name).all()
+    ]
+    return {
+        "accounts": accounts,
+        "external_accounts": [
+            {"label": label, "saved_account_id": saved.get(label)}
+            for label in sorted(labels)
+        ],
+        "rows": rows,
+        "row_count": len(rows),
+    }
 
 
 @router.post("/import/scan")
@@ -371,8 +414,22 @@ def import_scan(file: UploadFile, file_kind=None, mapping=None, db=Depends(get_d
 def list_batches(paging=Depends(pagination), db=Depends(get_db)):
     limit, offset = paging
     total = db.scalar(select(func.count()).select_from(models.ImportBatch)) or 0
-    items = db.scalars(select(models.ImportBatch).order_by(
+    batches = db.scalars(select(models.ImportBatch).order_by(
         models.ImportBatch.id.desc()).limit(limit).offset(offset)).all()
+    items = []
+    for batch in batches:
+        if batch.profile == "Holding":
+            committed = batch.staged
+        else:
+            committed = db.query(models.StagingRow).filter_by(
+                batch_id=batch.id, status="merged").count()
+        items.append({
+            "id": batch.id, "profile": batch.profile, "filename": batch.filename,
+            "account_id": batch.account_id, "created_at": batch.created_at,
+            "staged": batch.staged, "skipped": batch.skipped,
+            "committed": committed, "file_kind": batch.file_kind,
+            "status": batch.status, "rolled_back_at": batch.rolled_back_at,
+        })
     return {"items": items, "total": total}
 
 
@@ -383,9 +440,11 @@ def get_batch(id, db=Depends(get_db)):
         batch_id=b.id).group_by(models.StagingRow.status).all())
     kinds = dict(db.query(models.StagingRow.row_kind, func.count()).filter_by(
         batch_id=b.id).group_by(models.StagingRow.row_kind).all())
+    committed = b.staged if b.profile == "Holding" else counts.get("merged", 0)
     return {"id": b.id, "profile": b.profile, "filename": b.filename,
             "account_id": b.account_id, "created_at": b.created_at,
-            "staged": b.staged, "skipped": b.skipped, "by_status": counts,
+            "staged": b.staged, "skipped": b.skipped, "committed": committed,
+            "by_status": counts,
             "by_kind": kinds, "file_kind": b.file_kind, "mapping": b.mapping,
             "status": b.status, "rolled_back_at": b.rolled_back_at}
 

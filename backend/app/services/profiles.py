@@ -13,6 +13,11 @@ import datetime as dt
 import re
 
 PROFILES = {
+    "Holding": {
+        "account": ["account"],
+        "symbol": ["holding", "symbol", "ticker"],
+        "quantity": ["quantity", "shares", "qty"],
+    },
     "generic": {
         "date": ["date"],
         "merchant": ["merchant", "description", "name"],

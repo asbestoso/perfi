@@ -1,6 +1,6 @@
 """SQLAlchemy models. Money in INTEGER cents. Single-user (no auth tables)."""
 import datetime as dt
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -78,7 +78,11 @@ class Holding(Base):
     account_id = Column(ForeignKey("accounts.id"), nullable=True)
     quantity_milli = Column(Integer, default=0, nullable=False)  # qty * 1000
     price_cents = Column(Integer, default=0, nullable=False)
+    import_batch_id = Column(ForeignKey("import_batches.id"), nullable=True)
     account = relationship("Account")
+    __table_args__ = (
+        Index("uq_holdings_account_symbol", "account_id", func.upper(symbol), unique=True),
+    )
 
 
 class InvestmentClassification(Base):
@@ -133,6 +137,18 @@ class ImportBatch(Base):
     skipped = Column(Integer, default=0, nullable=False)
     account = relationship("Account")
     rows = relationship("StagingRow", back_populates="batch")
+
+
+class ImportAccountMapping(Base):
+    __tablename__ = "import_account_mappings"
+    id = Column(Integer, primary_key=True, nullable=False)
+    profile = Column(String(40), nullable=False)
+    external_label = Column(String(255), nullable=False)
+    account_id = Column(ForeignKey("accounts.id"), nullable=False)
+    account = relationship("Account")
+    __table_args__ = (
+        UniqueConstraint("profile", "external_label"),
+    )
 
 
 class BalanceSnapshot(Base):

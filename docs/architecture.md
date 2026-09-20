@@ -24,7 +24,7 @@ Read/Create/Update. Pagination helper caps `limit` at 500 (default 100).
 
 ## Core domain: stage → reconcile → ledger
 
-CSV/OFX uploads never write transactions directly. They create an
+CSV uploads never write transactions directly. They create an
 `ImportBatch` + `StagingRow`s (`services/csv_import.py`), the user reviews the
 queue on the Import page, and merging (`services/reconcile.py`) inserts
 `Transaction`s.
