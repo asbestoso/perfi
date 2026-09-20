@@ -3,12 +3,12 @@
 User settings (AI key etc.) are preserved — only domain data goes.
 """
 from ..models import Account, BalanceSnapshot, Budget, Category, CategoryRule
-from ..models import Holding, ImportBatch, InvestmentLot, Recurring
+from ..models import Holding, ImportBatch, Recurring
 from ..models import SavedReport, StagingRow, Transaction
 
 # Children before parents (SQLite does not enforce FKs here, but keep it safe).
 WIPED = (StagingRow, Transaction, Budget, CategoryRule, ImportBatch,
-         InvestmentLot, Holding, Recurring, BalanceSnapshot, SavedReport,
+         Holding, Recurring, BalanceSnapshot, SavedReport,
          Account, Category)
 
 

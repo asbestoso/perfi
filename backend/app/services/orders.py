@@ -1,14 +1,16 @@
 """Investment order creation shared by the API and trade approval.
 
-Orders are idempotent on a fingerprint of account + symbol + side +
-quantity + price + fees + date: posting the same order twice (double
-approval, re-uploaded file) returns the existing order without touching
-lots or holdings.
+Orders record raw trades (buys/sells with price and fees) and move the
+separate holdings ledger. There is no tax-lot resolution: sells are
+checked against holding quantity only. Orders are idempotent on a
+fingerprint of account + symbol + side + quantity + price + fees +
+date: posting the same order twice (double approval, re-uploaded file)
+returns the existing order without moving holdings twice.
 """
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func
 
-from ..models import Account, Holding, InvestmentLot, InvestmentOrder, Transaction
+from ..models import Account, Holding, InvestmentOrder, Transaction
 from .fingerprint import order_fingerprint
 
 
@@ -34,33 +36,6 @@ def create_order(db, account_id, symbol, side, quantity_milli, price_cents,
         return existing
     quantity = quantity_milli
     proceeds = (quantity * price_cents) // 1000 - fees_cents
-    cost_basis = None
-    gain = None
-    if side == "buy":
-        cost_basis = (quantity * price_cents) // 1000 + fees_cents
-        db.add(InvestmentLot(symbol=symbol, account_id=account_id,
-                             quantity_milli=quantity, cost_cents=cost_basis,
-                             acquired=executed_at))
-    else:
-        remaining = quantity
-        cost_basis = 0
-        lots = db.scalars(select(InvestmentLot).where(
-            InvestmentLot.account_id == account_id,
-            func.upper(InvestmentLot.symbol) == symbol,
-            InvestmentLot.quantity_milli > 0,
-        ).order_by(InvestmentLot.acquired, InvestmentLot.id)).all()
-        for lot in lots:
-            if not remaining:
-                break
-            consumed = min(remaining, lot.quantity_milli)
-            lot_cost = (lot.cost_cents * consumed) // lot.quantity_milli
-            lot.quantity_milli -= consumed
-            lot.cost_cents -= lot_cost
-            cost_basis += lot_cost
-            remaining -= consumed
-        if remaining:
-            raise HTTPException(status_code=422, detail="Sell exceeds available FIFO shares")
-        gain = proceeds - cost_basis
     linked = None
     if linked_transaction_id is not None:
         linked = db.get(Transaction, linked_transaction_id)
@@ -73,7 +48,6 @@ def create_order(db, account_id, symbol, side, quantity_milli, price_cents,
         quantity_milli=quantity, price_cents=price_cents,
         fees_cents=fees_cents, executed_at=executed_at,
         proceeds_cents=proceeds if side == "sell" else None,
-        cost_basis_cents=cost_basis, gain_cents=gain,
         linked_transaction_id=linked_transaction_id,
         fingerprint=fp,
     )

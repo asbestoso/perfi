@@ -154,6 +154,8 @@ function UploadForm({ onDone }: any) {
   const [recognized, setRecognized] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
 
+
+
   async function runScan(file: any, nextKind?: string, nextMapping?: any) {
     setScanning(true);
     try {
@@ -279,7 +281,9 @@ function UploadForm({ onDone }: any) {
                 <span className="mr-1 text-sm text-slate-600">This file is:</span>
                 {FILE_KINDS.map(([v, label]) => (
                   <button key={v} onClick={() => changeKind(v)}
-                    className={v === fileKind ? btnSmCls + " bg-pine-800 text-white" : btnSmCls}>
+                    className={v === fileKind
+                      ? "rounded-md border border-pine-800 bg-pine-800 px-2 py-0.5 text-xs font-medium text-white"
+                      : btnSmCls}>
                     {label}
                   </button>
                 ))}
@@ -565,12 +569,14 @@ function TradeCard({ row, batchId, onChange }: any) {
 
 function TradeQueue({ batchId, tick, onChange }: any) {
   const data = useGet(`/api/import/batches/${batchId}/rows?kind=trade&status=pending&tick=${tick}`);
-  const rows = data?.items || [];
+  // Oldest first: approving buys before later sells keeps holding checks passing.
+  const rows = [...(data?.items || [])].sort((a: any, b: any) =>
+    String(a.date).localeCompare(String(b.date)) || a.id - b.id);
   if (rows.length === 0) return null;
   return (
     <Card title={`Trades to approve (${rows.length})`}>
       <p className="mb-2 text-sm text-slate-500">
-        Approving creates the order, tax lot, and holding — never a spending transaction. Re-approvals are no-ops.
+        Approving creates the order and moves the holding — never a spending transaction. Re-approvals are no-ops.
       </p>
       <ul className="divide-y divide-slate-100">
         {rows.map((r: any) => <TradeCard key={r.id} row={r} batchId={batchId} onChange={onChange} />)}
@@ -637,90 +643,33 @@ function BatchSummary({ batchId, tick, onChange }: any) {
   );
 }
 
-function LotsUploadForm() {
-  const [msg, setMsg] = useState("");
-  async function submit(e: any) {
-    e.preventDefault();
-    setMsg("Uploading…");
-    const file = e.target.elements.file.files[0];
-    if (!file) { setMsg("Pick a file first."); return; }
-    const fd = new FormData();
-    fd.append("file", file);
-    try {
-      const r = await api("/api/investments/import", { method: "POST", body: fd });
-      setMsg(`Imported ${r.created} lot${r.created === 1 ? "" : "s"}, skipped ${r.skipped}. Missing cost basis and duplicates are skipped — see backend log for lines.`);
-    } catch (err: any) {
-      setMsg(`Failed: ${err.message}`);
-    }
-  }
-  return (
-    <form onSubmit={submit} className="flex flex-wrap items-end gap-2">
-      <input name="file" type="file" accept=".csv" className="text-sm text-slate-500 file:mr-2 file:rounded-lg file:border-0 file:bg-pine-800 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-pine-700" />
-      <button className={btnCls}>Upload lots</button>
-      {msg && <span className="text-sm text-slate-600">{msg}</span>}
-    </form>
-  );
-}
-
 export default function Import() {
   const [batchId, setBatchId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
-  const [tab, setTab] = useState("bank");
   const bump = () => setTick((t) => t + 1);
-  const tabCls = (active: boolean) =>
-    `rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-      active ? "bg-pine-800 text-white" : "text-slate-500 hover:bg-slate-100"
-    }`;
 
   return (
     <Page title="Import">
-      <div className="mb-4 flex gap-1 rounded-xl bg-slate-100 p-1">
-        <button onClick={() => setTab("bank")} className={tabCls(tab === "bank")}>
-          Bank statements
-        </button>
-        <button onClick={() => setTab("brokerage")} className={tabCls(tab === "brokerage")}>
-          Brokerage
-        </button>
-      </div>
-      {tab === "bank" ? (
+      <TransferSuggestions tick={tick} onChange={bump} />
+      <FundingSuggestions tick={tick} onChange={bump} />
+      <Card title="Upload">
+        <p className="mb-2 text-sm text-slate-500">
+          Bank statements and brokerage activity exports land here. New layouts ask you to
+          confirm the columns first; known layouts upload straight through.
+          Accounts are matched by name and created if new.
+        </p>
+        <UploadForm onDone={(id: number) => { setBatchId(id); bump(); }} />
+      </Card>
+      <Card title="Batches">
+        <BatchList active={batchId} onSelect={setBatchId} tick={tick} />
+      </Card>
+      {batchId != null && (
         <>
-          <TransferSuggestions tick={tick} onChange={bump} />
-          <FundingSuggestions tick={tick} onChange={bump} />
-          <Card title="Upload">
-            <p className="mb-2 text-sm text-slate-500">
-              New layouts ask you to confirm the columns first; known layouts upload straight through.
-              Accounts are matched by name and created if new.
-            </p>
-            <UploadForm onDone={(id: number) => { setBatchId(id); bump(); }} />
-          </Card>
-          <Card title="Batches">
-            <BatchList active={batchId} onSelect={setBatchId} tick={tick} />
-          </Card>
-          {batchId != null && (
-            <>
-              <TradeQueue batchId={batchId} tick={tick} onChange={bump} />
-              <UnknownQueue batchId={batchId} tick={tick} onChange={bump} />
-              <Card title={`Batch #${batchId} rows`}>
-                <BatchSummary batchId={batchId} tick={tick} onChange={bump} />
-                <RowQueue batchId={batchId} tick={tick} onChange={bump} />
-              </Card>
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <Card title="Tax lots CSV">
-            <p className="mb-2 text-sm text-slate-500">
-              Columns: symbol/ticker, quantity/shares, cost/cost basis, optional acquired date.
-              Idempotent on (symbol, quantity, cost, acquired); rows without cost are skipped.
-              Lots never touch spending totals — buys/sells with cash legs belong on the Portfolio page.
-            </p>
-            <LotsUploadForm />
-          </Card>
-          <Card title="Buys & sells">
-            <p className="text-sm text-slate-500">
-              Record orders (with optional cash-leg links) on the <a href="/investments" className="font-medium text-pine-700 hover:underline">Portfolio</a> page.
-            </p>
+          <TradeQueue batchId={batchId} tick={tick} onChange={bump} />
+          <UnknownQueue batchId={batchId} tick={tick} onChange={bump} />
+          <Card title={`Batch #${batchId} rows`}>
+            <BatchSummary batchId={batchId} tick={tick} onChange={bump} />
+            <RowQueue batchId={batchId} tick={tick} onChange={bump} />
           </Card>
         </>
       )}

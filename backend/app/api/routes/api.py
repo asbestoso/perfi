@@ -13,7 +13,6 @@ from ..pagination import pagination
 from ...services import ai_provider, analytics, mcp_server, reconcile, settings_store
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
-from ...services.lots_import import import_lots
 from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
 from ...services.ofx_import import import_ofx
 from ...services.profiles import detect_source, header_signature, propose_mapping, unmapped_columns
@@ -325,7 +324,12 @@ def import_scan(file: UploadFile, file_kind=None, mapping=None, db=Depends(get_d
         if not isinstance(custom, dict):
             raise HTTPException(status_code=422, detail="mapping must be a JSON object")
         active_mapping = {f: custom.get(f) for f in proposed}
-    kind = file_kind or "mixed"
+    source, confidence = detect_source(headers)
+    if source == "robinhood":
+        suggested_file_kind = "brokerage"
+    else:
+        suggested_file_kind = "mixed"
+    kind = file_kind or suggested_file_kind
     if kind not in ("mixed", "brokerage", "spending"):
         raise HTTPException(status_code=422, detail="Invalid file kind")
     rows = list(reader)
@@ -345,13 +349,6 @@ def import_scan(file: UploadFile, file_kind=None, mapping=None, db=Depends(get_d
             continue
         row_kind, _detail = classify(norm, kind)
         counts[row_kind] = counts.get(row_kind, 0) + 1
-    source, confidence = detect_source(headers)
-    if source == "robinhood":
-        suggested_file_kind = "brokerage"
-    elif source == "lots":
-        suggested_file_kind = "brokerage"
-    else:
-        suggested_file_kind = "mixed"
     return {"filename": file.filename or "",
             "signature": header_signature(headers),
             "headers": headers,
@@ -457,7 +454,7 @@ def approve_trade(id, staging_id: int, side=None, db=Depends(get_db)):
 
     Optional side override (buy/sell) corrects a misread suggestion.
     Approving twice, or approving a re-uploaded duplicate, returns the
-    same order without creating new lots.
+    same order without moving holdings twice.
     """
     import json
     from ...services.fingerprint import order_fingerprint
@@ -746,45 +743,6 @@ def investments_summary(db=Depends(get_db)):
     return analytics.portfolio_summary(db)
 
 
-@router.post("/investments/import")
-def investments_import(file: UploadFile, db=Depends(get_db)):
-    return import_lots(db, file.file.read())
-
-
-@router.get("/lots", response_model=schemas.Page[schemas.LotRead])
-def list_lots(paging=Depends(pagination), db=Depends(get_db)):
-    limit, offset = paging
-    total = db.scalar(select(func.count()).select_from(models.InvestmentLot)) or 0
-    items = db.scalars(select(models.InvestmentLot).order_by(
-        models.InvestmentLot.symbol).limit(limit).offset(offset)).all()
-    return {"items": items, "total": total}
-
-
-@router.post("/lots", response_model=schemas.LotRead)
-def create_lot(payload: schemas.LotCreate, db=Depends(get_db)):
-    lot = models.InvestmentLot(**payload.model_dump())
-    db.add(lot); db.commit(); db.refresh(lot)
-    return lot
-
-
-@router.patch("/lots/{id}", response_model=schemas.LotRead)
-def update_lot(id, payload: schemas.LotUpdate, db=Depends(get_db)):
-    lot = _get_or_404(db, models.InvestmentLot, _as_int(id, "id"))
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(lot, k, v)
-    db.commit()
-    db.refresh(lot)
-    return lot
-
-
-@router.delete("/lots/{id}")
-def delete_lot(id, db=Depends(get_db)):
-    lot = _get_or_404(db, models.InvestmentLot, _as_int(id, "id"))
-    db.delete(lot)
-    db.commit()
-    return {"ok": True}
-
-
 @router.get("/investment-orders", response_model=schemas.Page[schemas.OrderRead])
 def list_investment_orders(paging=Depends(pagination), db=Depends(get_db)):
     limit, offset = paging
@@ -797,9 +755,25 @@ def list_investment_orders(paging=Depends(pagination), db=Depends(get_db)):
 
 @router.get("/investment-orders/analysis")
 def investment_orders_analysis(db=Depends(get_db)):
+    """Order-level trade P&L from raw orders only.
+
+    Buys show purchase cost (qty x price + fees) against the latest
+    quote. Sells show proceeds against the average buy price for that
+    account + symbol, computed here on the fly. This is display-only
+    trade analysis, not tax-lot resolution: nothing is stored.
+    """
     orders = db.scalars(select(models.InvestmentOrder).order_by(
         models.InvestmentOrder.executed_at.desc(),
         models.InvestmentOrder.id.desc())).all()
+    bought = {}
+    for order in orders:
+        if order.side != "buy":
+            continue
+        key = (order.account_id, order.symbol.upper())
+        qty, cost = bought.get(key, (0, 0))
+        bought[key] = (qty + order.quantity_milli,
+                       cost + (order.quantity_milli * order.price_cents) // 1000
+                       + (order.fees_cents or 0))
     prices = {}
     items = []
     today = dt.date.today()
@@ -819,25 +793,28 @@ def investment_orders_analysis(db=Depends(get_db)):
                 prices[symbol] = get_live_price(symbol)
             except QuoteUnavailableError:
                 prices[symbol] = order.price_cents
-        cost_basis = order.cost_basis_cents or 0
         if order.side == "buy":
+            cost = ((order.quantity_milli * order.price_cents) // 1000
+                    + (order.fees_cents or 0))
             market_value = (order.quantity_milli * prices[symbol]) // 1000
-            gain = market_value - cost_basis
+            gain = market_value - cost
         else:
             market_value = order.proceeds_cents or 0
-            gain = order.gain_cents or 0
-        percent = gain / cost_basis * 100 if cost_basis else 0
+            qty, total = bought.get((order.account_id, symbol), (0, 0))
+            cost = (order.quantity_milli * total) // qty if qty else 0
+            gain = market_value - cost
+        percent = gain / cost * 100 if cost else 0
         days = max((today - order.executed_at).days, 1)
-        annualized = ((1 + gain / cost_basis) ** (365 / days) - 1) * 100 \
-            if order.executed_at <= four_months_ago and cost_basis \
-            and 1 + gain / cost_basis > 0 else None
+        annualized = ((1 + gain / cost) ** (365 / days) - 1) * 100 \
+            if order.executed_at <= four_months_ago and cost \
+            and 1 + gain / cost > 0 else None
         items.append({
             "id": order.id, "account_name": order.account.name,
             "symbol": symbol, "side": order.side,
             "quantity_milli": order.quantity_milli,
             "executed_at": order.executed_at,
             "market_value_cents": market_value,
-            "cost_basis_cents": cost_basis,
+            "cost_cents": cost,
             "gain_cents": gain,
             "percent": percent,
             "annualized_percent": annualized,

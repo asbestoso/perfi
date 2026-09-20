@@ -1,34 +1,23 @@
-def test_lots_crud(client):
-    r = client.post("/api/lots", json={
-        "symbol": "VTI", "quantity_milli": 10000, "cost_cents": 200000,
-        "acquired": "2025-06-01"})
-    assert r.status_code == 200
-    lot = r.json()
-    assert lot["acquired"] == "2025-06-01"
-
-    r = client.patch(f"/api/lots/{lot['id']}", json={"cost_cents": 210000})
-    assert r.json()["cost_cents"] == 210000
-    assert client.patch("/api/lots/9999", json={"cost_cents": 1}).status_code == 404
-
-    assert client.get("/api/lots").json()["total"] == 1
-    assert client.delete(f"/api/lots/{lot['id']}").json() == {"ok": True}
-    assert client.get("/api/lots").json()["total"] == 0
-
-
-def test_orders_create_fifo_buy_and_sell(store, client, monkeypatch):
+def test_orders_track_purchases_without_tax_lots(store, client, monkeypatch):
     monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 12000)
     buy = client.post("/api/investment-orders", json={
         "account_id": store["acct"], "symbol": "VTI", "side": "buy",
         "quantity_milli": 10000, "price_cents": 10000,
         "executed_at": "2026-01-01"})
     assert buy.status_code == 200
+    assert buy.json()["proceeds_cents"] is None
+    # no lot resolution: orders carry no cost or gain fields
+    assert "cost_basis_cents" not in buy.json()
+    assert "gain_cents" not in buy.json()
     sell = client.post("/api/investment-orders", json={
         "account_id": store["acct"], "symbol": "VTI", "side": "sell",
         "quantity_milli": 4000, "price_cents": 12000,
         "executed_at": "2026-02-01"})
     assert sell.status_code == 200
-    assert sell.json()["cost_basis_cents"] == 40000
-    assert sell.json()["gain_cents"] == 8000
+    assert sell.json()["proceeds_cents"] == 48000
+    holdings = client.get("/api/investments").json()["holdings"]
+    assert sum(h["quantity_milli"] for h in holdings) == 6000
+    # selling more than the holding rejects (holdings check, not lots)
     assert client.post("/api/investment-orders", json={
         "account_id": store["acct"], "symbol": "VTI", "side": "sell",
         "quantity_milli": 7000, "price_cents": 12000,
@@ -36,7 +25,7 @@ def test_orders_create_fifo_buy_and_sell(store, client, monkeypatch):
     response = client.get("/api/investment-orders/analysis")
     assert response.status_code == 200
     sell_row = next(row for row in response.json()["items"] if row["side"] == "sell")
-    assert sell_row["cost_basis_cents"] == 40000
+    assert sell_row["cost_cents"] == 40000
     assert sell_row["gain_cents"] == 8000
     assert sell_row["percent"] == 20
     buy_row = next(row for row in response.json()["items"] if row["side"] == "buy")
@@ -60,23 +49,17 @@ def test_summary_math(client, monkeypatch):
     )
     client.post("/api/investments", json={
         "symbol": "VTI", "quantity_milli": 10000, "price_cents": 25000})
-    client.post("/api/lots", json={
-        "symbol": "vti", "quantity_milli": 6000, "cost_cents": 120000})
-    client.post("/api/lots", json={
-        "symbol": "VTI", "quantity_milli": 4000, "cost_cents": 80000})
-    # holding without lots: cost unknown
     client.post("/api/investments", json={
         "symbol": "BND", "quantity_milli": 5000, "price_cents": 8000})
 
     s = client.get("/api/investments/summary").json()
     by_sym = {p["symbol"]: p for p in s["positions"]}
     assert by_sym["VTI"]["market_cents"] == 250000
-    assert by_sym["VTI"]["cost_cents"] == 200000
-    assert by_sym["VTI"]["gain_cents"] == 50000
-    assert by_sym["BND"]["cost_cents"] is None and by_sym["BND"]["gain_cents"] is None
+    # holdings-only summary: no cost or gain keys at all
+    assert "cost_cents" not in by_sym["VTI"] and "gain_cents" not in by_sym["VTI"]
+    assert by_sym["BND"]["market_cents"] == 40000
     assert s["market_cents"] == 250000 + 40000
-    assert s["cost_cents"] == 200000
-    assert s["gain_cents"] == 50000
+    assert "cost_cents" not in s and "gain_cents" not in s
 
 
 def test_summary_aggregates_same_symbol_across_accounts(store, client, monkeypatch):
@@ -211,30 +194,3 @@ def test_btc_uses_bitcoin_usd_yahoo_symbol(client, monkeypatch):
     from app.services.market_data import yahoo_symbol
     assert yahoo_symbol("BTC") == "BTC-USD"
     assert yahoo_symbol("AAPL") == "AAPL"
-
-
-def test_lots_csv_import(client):
-    body = ("symbol,quantity,cost,acquired\n"
-            'VTI,10.5,"$2,100.00",2025-01-15\n'
-            "BND,,500,2025-02-01\n"
-            "XXX,abc,10,\n")
-    r = client.post("/api/investments/import",
-                    files={"file": ("lots.csv", body, "text/csv")})
-    assert r.status_code == 200, r.text
-    assert r.json() == {"created": 1, "skipped": 2}
-    lots = client.get("/api/lots").json()["items"]
-    assert lots[0]["symbol"] == "VTI" and lots[0]["quantity_milli"] == 10500
-    assert lots[0]["cost_cents"] == 210000
-
-
-def test_lots_import_is_idempotent_and_rejects_missing_cost(client):
-    body = ("symbol,quantity,cost,acquired\n"
-            "VTI,10,2100.00,2025-01-15\n"
-            "BND,5,,2025-02-01\n")
-    r = client.post("/api/investments/import",
-                    files={"file": ("lots.csv", body, "text/csv")})
-    assert r.json() == {"created": 1, "skipped": 1}
-    r = client.post("/api/investments/import",
-                    files={"file": ("lots.csv", body, "text/csv")})
-    assert r.json() == {"created": 0, "skipped": 2}
-    assert client.get("/api/lots").json()["total"] == 1

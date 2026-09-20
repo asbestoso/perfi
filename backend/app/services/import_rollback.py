@@ -3,7 +3,7 @@ import datetime as dt
 from fastapi import HTTPException
 from sqlalchemy import or_
 
-from ..models import Holding, ImportBatch, InvestmentLot, InvestmentOrder, Transaction
+from ..models import Holding, ImportBatch, InvestmentOrder, Transaction
 
 
 def rollback_batch(db, batch_id):
@@ -35,27 +35,6 @@ def rollback_batch(db, batch_id):
                 )
             if holding.quantity_milli == 0:
                 db.delete(holding)
-        if order.side == "buy":
-            lot = db.query(InvestmentLot).filter(
-                InvestmentLot.account_id == order.account_id,
-                InvestmentLot.symbol.ilike(order.symbol),
-                InvestmentLot.quantity_milli == order.quantity_milli,
-                InvestmentLot.cost_cents == (order.cost_basis_cents or 0),
-                InvestmentLot.acquired == order.executed_at,
-            ).order_by(InvestmentLot.id.desc()).first()
-            if lot is None:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"cannot roll back order {order.id}: original lot is missing or changed",
-                )
-            db.delete(lot)
-        else:
-            db.add(InvestmentLot(
-                symbol=order.symbol, account_id=order.account_id,
-                quantity_milli=order.quantity_milli,
-                cost_cents=order.cost_basis_cents or 0,
-                acquired=order.executed_at,
-            ))
         db.delete(order)
 
     for transaction in transactions:

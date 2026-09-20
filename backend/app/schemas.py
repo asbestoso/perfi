@@ -186,27 +186,6 @@ class HoldingRead(HoldingCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
-class LotCreate(BaseModel):
-    symbol: str
-    account_id: Optional[int] = None
-    quantity_milli: int = 0
-    cost_cents: int = 0
-    acquired: Optional[dt.date] = None
-
-
-class LotRead(LotCreate):
-    id: int
-    model_config = ConfigDict(from_attributes=True)
-
-
-class LotUpdate(BaseModel):
-    symbol: Optional[str] = None
-    account_id: Optional[int] = None
-    quantity_milli: Optional[int] = None
-    cost_cents: Optional[int] = None
-    acquired: Optional[dt.date] = None
-
-
 class OrderCreate(BaseModel):
     account_id: int
     symbol: str
@@ -221,8 +200,6 @@ class OrderCreate(BaseModel):
 class OrderRead(OrderCreate):
     id: int
     proceeds_cents: Optional[int] = None
-    cost_basis_cents: Optional[int] = None
-    gain_cents: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
 
 

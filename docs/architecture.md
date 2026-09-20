@@ -42,9 +42,10 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
   into orders, unknowns wait for review or discard.
 - **New accounts**: brokerage-context rows create investing-group
   accounts; existing accounts are never re-grouped by import.
-- **Trade approval**: `POST .../approve-trade` creates the order + lot +
-  holding via `services/orders.py`, idempotent on an order fingerprint
-  (double approval and re-uploads collapse to the same order).
+- **Trade approval**: `POST .../approve-trade` creates the order and
+  moves the holding via `services/orders.py`, idempotent on an order
+  fingerprint (double approval and re-uploads collapse to the same
+  order).
 - **Funded buys**: `services/funding.py` links a checking→brokerage
   deposit to the buy it funded on exact principal match inside 14 days
   (auto on approval when unambiguous, suggestions + explicit link
@@ -69,12 +70,14 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
   `GET /api/transfers/suggestions`, shown on the Transactions page.
 - **Budgets**: per-category monthly limits with Monarch-style flexible
   rollover; `budget_status` returns limit/spent/remaining/pace per row.
-- **Investments**: `Holding`s carry live price/qty; `InvestmentLot`s carry tax
-  lots. Lots CSV import is idempotent on (symbol, qty, cost, acquired) and
-  rejects missing cost basis instead of defaulting $0. `InvestmentOrder`s
-  record buys/sells (FIFO lot relief) and may link one cash `Transaction`
-  via `linked_transaction_id`; the linked leg gets `transfer_id=order:<id>`
-  so it leaves spend totals.
+- **Investments**: holdings and trades are separate. `Holding`s carry live
+  price/qty and are moved by orders; `InvestmentOrder`s record raw
+  buy/sell trades (price, fees, proceeds) with no tax-lot resolution —
+  sells validate against holding quantity only. The summary is
+  holdings-only (positions + market value, no cost/gain); trade analysis
+  computes sell P&L against the on-the-fly average buy price. Orders may
+  link one cash `Transaction` via `linked_transaction_id`; the linked
+  leg gets `transfer_id=order:<id>` so it leaves spend totals.
 - **Domains**: every `Account` has a `domain` (`spending` | `investing` |
   `mixed`; backfilled from type, user-overridable). Spend queries
   (`month_spent`, `monthly_spend`, `monthly_trends`, `category_trends`,
@@ -104,6 +107,6 @@ The sidebar groups links into Overview / Spending / Investing / Manage
 `dollars`, input/button classes. Pages are otherwise independent; after a
 mutation they bump a `tick` state appended to the query string to refetch
 (same pattern as Import). Dashboard is the combined overview (net worth +
-spending + portfolio cards with drill links); Import has Bank statements /
+spending + portfolio cards with drill links); Import has Activity /
 Brokerage tabs; Reports and Transactions carry a Group (domain) selector
 and saved reports store `params.domain`.

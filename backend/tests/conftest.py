@@ -58,3 +58,19 @@ def make_txn(client, aid, cid, cents, merchant, date):
         "merchant": merchant, "date": date})
     assert r.status_code == 200
     return r.json()
+
+
+#: Verbatim Robinhood activity sample (redacted user paste) for the
+#: brokerage-activity scan/import tests.
+ROBINHOOD_ACTIVITY_CSV = (
+    '"Activity Date","Process Date","Settle Date","Instrument","Description",'
+    '"Trans Code","Quantity","Price","Amount"\n'
+    '"12/29/2023","12/29/2023","12/29/2023","VNM",'
+    '"Cash Div: R/D 2023-12-28 P/D 2023-12-29 - 45 shares at 0.0185",'
+    '"CDIV","","","$0.83"\n'
+    '"12/29/2023","12/29/2023","12/29/2023","","Interest Payment",'
+    '"INT","","","$13.50"\n'
+    '"12/27/2023","12/27/2023","12/27/2023","VTI",'
+    '"Cash Div: R/D 2023-12-22 P/D 2023-12-27 - 47 shares at 1.0017",'
+    '"CDIV","","","$47.08"\n'
+)

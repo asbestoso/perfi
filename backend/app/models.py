@@ -96,18 +96,6 @@ class InvestmentAllocation(Base):
     percent_bps = Column(Integer, nullable=False)
 
 
-class InvestmentLot(Base):
-    """One tax lot: quantity and total cost basis. Market price comes from holdings."""
-    __tablename__ = "investment_lots"
-    id = Column(Integer, primary_key=True, nullable=False)
-    symbol = Column(String(20), nullable=False)
-    account_id = Column(ForeignKey("accounts.id"), nullable=True)
-    quantity_milli = Column(Integer, default=0, nullable=False)  # qty * 1000
-    cost_cents = Column(Integer, default=0, nullable=False)  # total cost basis
-    acquired = Column(Date, nullable=True)
-    account = relationship("Account")
-
-
 class InvestmentOrder(Base):
     __tablename__ = "investment_orders"
     id = Column(Integer, primary_key=True, nullable=False)
@@ -122,8 +110,6 @@ class InvestmentOrder(Base):
     fees_cents = Column(Integer, default=0, nullable=False)
     executed_at = Column(Date, nullable=False)
     proceeds_cents = Column(Integer, nullable=True)
-    cost_basis_cents = Column(Integer, nullable=True)
-    gain_cents = Column(Integer, nullable=True)
     account = relationship("Account")
 
 

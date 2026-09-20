@@ -17,12 +17,13 @@ export default function TradeAnalysis() {
   const items = data?.items || [];
 
   return (
-    <Page title="Trade analysis" sub="Review order-level performance, cost basis, and current value.">
+    <Page title="Trade analysis" sub="Review order-level performance and current value.">
       <section className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(16,24,32,0.06)]">
         <div className="mb-3">
           <h2 className="text-base font-semibold tracking-tight">Orders ({items.length})</h2>
           <p className="mt-0.5 text-sm text-slate-500">
-            Buy orders use the latest quote for market value; sells use realized proceeds.
+            Buy orders use the latest quote for market value; sells use realized proceeds
+            against your average buy price. Simple trade P&amp;L, not tax lots.
           </p>
         </div>
         <Error data={data} />
@@ -33,7 +34,7 @@ export default function TradeAnalysis() {
                 <tr>
                   <th>Date</th><th>Symbol</th><th>Account</th><th>Action</th>
                   <th className="text-right">Shares</th><th className="text-right">Market value</th>
-                  <th className="text-right">Cost basis</th><th className="text-right">Gain / loss</th>
+                  <th className="text-right">Cost</th><th className="text-right">Gain / loss</th>
                   <th className="text-right">Percent</th><th className="text-right">Annualized</th>
                 </tr>
               </thead>
@@ -48,7 +49,7 @@ export default function TradeAnalysis() {
                     </td>
                     <td className="text-right tabular-nums">{shares(item.quantity_milli)}</td>
                     <td className="text-right tabular-nums">{dollars(item.market_value_cents)}</td>
-                    <td className="text-right tabular-nums">{dollars(item.cost_basis_cents)}</td>
+                    <td className="text-right tabular-nums">{dollars(item.cost_cents)}</td>
                     <td className={`text-right tabular-nums ${item.gain_cents >= 0 ? "text-pine-700" : "text-red-700"}`}>
                       {dollars(item.gain_cents)}
                     </td>

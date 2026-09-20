@@ -77,7 +77,6 @@ SOURCE_SIGNALS = {
     "robinhood": ["transcode", "instrument", "activitydate"],
     "mint": ["transactiontype", "accountname"],
     "empower": [],
-    "lots": ["costbasis", "cost"],
 }
 
 

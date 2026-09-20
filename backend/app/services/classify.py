@@ -20,11 +20,17 @@ FILE_KINDS = ("mixed", "brokerage", "spending")
 ROW_KINDS = ("spend", "brokerage_cash", "trade", "unknown")
 
 #: Robinhood Trans Codes that post brokerage cash, with transaction kind.
+#: Codes absent here but known-transfer (ACH) are handled by sign below.
 CASH_CODES = {
     "CDIV": "investment_distribution",
     "DIV": "investment_distribution",
     "INT": "investment_distribution",
+    "DFEE": "expense",
 }
+
+#: Transfer codes: cash in/out of the brokerage, kinded by sign. Only
+#: outside spending-only files, where an ACH row is ordinary bank activity.
+TRANSFER_CODES = ("ACH",)
 
 BUY_CODES = ("BUY", "B", "BOT", "BOUGHT")
 SELL_CODES = ("SELL", "S", "SLD", "SOLD")
@@ -105,13 +111,19 @@ def classify(parsed, file_kind="mixed"):
     human reason for unknown rows.
     """
     code = (parsed.get("code") or "").upper()
-    if code in CASH_CODES:
-        return "brokerage_cash", {"transaction_kind": CASH_CODES[code]}
     if is_trade_shaped(parsed):
         if file_kind == "spending":
             return "unknown", {"reason": "trade-shaped row in a spending-only file"}
         return "trade", {"side": _trade_side(parsed)}
-    if code and file_kind == "brokerage":
+    if file_kind == "spending":
+        kind = "income" if parsed.get("amount_cents", 0) > 0 else "expense"
+        return "spend", {"transaction_kind": kind}
+    if code in CASH_CODES:
+        return "brokerage_cash", {"transaction_kind": CASH_CODES[code]}
+    if code in TRANSFER_CODES:
+        kind = "income" if parsed.get("amount_cents", 0) >= 0 else "expense"
+        return "brokerage_cash", {"transaction_kind": kind}
+    if code:
         return "unknown", {"reason": f"unsupported activity code {code}"}
     if file_kind == "brokerage":
         kind = "income" if parsed.get("amount_cents", 0) >= 0 else "expense"

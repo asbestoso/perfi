@@ -1,17 +1,5 @@
 """Mixed-file import: header scan, mapping, kinds, trades, funded buys."""
-
-ROBINHOOD_CSV = (
-    '"Activity Date","Process Date","Settle Date","Instrument","Description",'
-    '"Trans Code","Quantity","Price","Amount"\n'
-    '"12/29/2023","12/29/2023","12/29/2023","VNM",'
-    '"Cash Div: R/D 2023-12-28 P/D 2023-12-29 - 45 shares at 0.0185",'
-    '"CDIV","","","$0.83"\n'
-    '"12/29/2023","12/29/2023","12/29/2023","","Interest Payment",'
-    '"INT","","","$13.50"\n'
-    '"12/27/2023","12/27/2023","12/27/2023","VTI",'
-    '"Cash Div: R/D 2023-12-22 P/D 2023-12-27 - 47 shares at 1.0017",'
-    '"CDIV","","","$47.08"\n'
-)
+from conftest import ROBINHOOD_ACTIVITY_CSV as ROBINHOOD_CSV
 
 
 def _scan(client, body, name="activity.csv"):
@@ -35,6 +23,45 @@ def test_scan_detects_robinhood_layout(store, client):
     assert len(body["signature"]) == 16
     assert len(body["samples"]) == 3
     assert body["samples"][0]["rendered"]["amount"] == "$0.83"
+
+
+CASH_CODES_CSV = ("Activity Date,Description,Amount,Trans Code,Instrument,Quantity,Price\n"
+                  "01/05/2026,Deposit,5000.00,ACH,,\n"
+                  "01/06/2026,Withdrawal,-100.00,ACH,,\n"
+                  "01/07/2026,Dividend fee,-2.00,DFEE,VTI,,\n")
+
+
+def _upload_codes(client, file_kind, name="codes.csv"):
+    return _upload_mapped(client, CASH_CODES_CSV, {
+        "date": "Activity Date", "merchant": "Description", "amount": "Amount",
+        "type": "Trans Code", "symbol": "Instrument", "quantity": "Quantity",
+        "price": "Price", "account": None, "category": None, "note": None,
+    }, file_kind=file_kind, name=name)
+
+
+def test_transfer_and_fee_codes_stage_as_brokerage_cash(store, client):
+    for kind, expected in (("brokerage", {"brokerage_cash": 3}),
+                           ("mixed", {"brokerage_cash": 3})):
+        r = _upload_codes(client, kind, name=f"{kind}.csv")
+        assert r.status_code == 200, r.text
+        assert r.json()["by_kind"] == expected
+    rows = client.get("/api/import/batches/1/rows?kind=brokerage_cash").json()["items"]
+    kinds = {t["merchant"]: t["transaction_kind"] for t in rows}
+    assert kinds == {"Deposit": "income", "Withdrawal": "expense",
+                     "Dividend fee": "expense"}
+
+
+def test_transfer_codes_stay_spend_in_spending_files(store, client):
+    r = _upload_codes(client, "spending", name="spend.csv")
+    assert r.status_code == 200, r.text
+    assert r.json()["by_kind"] == {"spend": 3}
+
+
+def test_scan_defaults_to_suggested_kind(store, client):
+    r = _scan(client, ROBINHOOD_CSV)
+    assert r.status_code == 200, r.text
+    assert r.json()["file_kind"] == "brokerage"
+    assert r.json()["counts"] == {"brokerage_cash": 3}
 
 
 def test_scan_counts_preview_by_kind(store, client):
@@ -177,8 +204,11 @@ def test_approve_trade_creates_order_once(store, client):
     assert first["ok"] and first["created"] is True
     assert first["funded_transaction_id"] is None
     assert client.get("/api/transactions?limit=1").json()["total"] == 0
-    lots = client.get("/api/lots").json()
-    assert lots["total"] == 1 and lots["items"][0]["cost_cents"] == 100000
+    orders = client.get("/api/investment-orders").json()
+    assert orders["total"] == 1
+    assert orders["items"][0]["price_cents"] == 10000
+    holdings = client.get("/api/investments").json()["holdings"]
+    assert len(holdings) == 1 and holdings[0]["quantity_milli"] == 10000
 
     again = client.post(
         f"/api/import/batches/{bid}/approve-trade?staging_id={sid}")
@@ -193,12 +223,11 @@ def test_approve_trade_creates_order_once(store, client):
     second = client.post(
         f"/api/import/batches/{bid2}/approve-trade?staging_id={dupe['id']}").json()
     assert second["order_id"] == first["order_id"] and second["created"] is False
-    assert client.get("/api/lots").json()["total"] == 1
     orders = client.get("/api/investment-orders").json()
     assert orders["total"] == 1
 
 
-def test_rollback_trade_batch_reverses_order_lot_and_holding(store, client):
+def test_rollback_trade_batch_reverses_order_and_holding(store, client):
     r = _upload_mapped(client, TRADE_CSV, TRADE_MAPPING, name="rollback-trades.csv")
     bid = r.json()["batch_id"]
     sid = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()["items"][0]["id"]
@@ -206,13 +235,11 @@ def test_rollback_trade_batch_reverses_order_lot_and_holding(store, client):
         f"/api/import/batches/{bid}/approve-trade?staging_id={sid}").json()
     assert approved["created"] is True
     assert client.get("/api/investment-orders").json()["total"] == 1
-    assert client.get("/api/lots").json()["total"] == 1
     assert client.post(f"/api/import/batches/{bid}/rollback").json() == {
         "ok": True, "batch_id": bid, "transactions": 0,
         "investment_orders": 1,
     }
     assert client.get("/api/investment-orders").json()["total"] == 0
-    assert client.get("/api/lots").json()["total"] == 0
     assert client.get("/api/investments").json()["holdings"] == []
 
 

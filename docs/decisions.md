@@ -54,7 +54,7 @@ were deleted; the live session log itself was left alone.
   (`CASH_CODES`) grows one line per new cash activity.
 - Order creation moved verbatim into `services/orders.py` (API + approval
   share it) and gained fingerprint idempotency; re-uploads and double
-  approvals return the same order without touching lots.
+  approvals return the same order without moving holdings twice.
 - Funded-buy auto-link needs an exact principal match, one candidate, 14
   days. `DELETE /investment-orders/{id}/link` reverses every `order:*`
   mark — closing the "no unlink yet" gap from the domain-separation entry.
@@ -63,6 +63,22 @@ were deleted; the live session log itself was left alone.
   a follow-up revision applies the difference. Lesson: treat a migration
   file as frozen once any environment may have run it — new columns mean
   a new revision.
+
+## 2026-09-16 — lots CSV importer removed, cost data kept
+
+- Only the cost-basis *import path* is gone: `lots_import.py`,
+  `POST /investments/import`, the Import Brokerage tab, and the lots
+  source signal. Everything else stays: `investment_lots`, manual
+  `/lots` CRUD, FIFO relief in order creation, and order/summary cost and
+  gain fields. Cost is preserved whenever it exists via entry or order
+  fills; the importer was removed because the anticipated Empower lots
+  export never became a real data source while the Robinhood-activity
+  flow never needed it.
+- Correction history: an over-broad removal (`d0e1f2a3b4c5`, dropped the
+  table + columns) was reversed by `e1f2a3b4c5d6` in the same session
+  after the scope was clarified — cost structures must not be destroyed
+  on an ambiguous request.
+- Pre-removal DB with 15 lot rows kept at `/tmp/perfi-prelots-removal.db`.
 
 ## 2026-09-16 — spending/investing domain separation
 
@@ -84,3 +100,16 @@ were deleted; the live session log itself was left alone.
   the leg is marked `transfer_id=order:<id>` so existing spend/recurring
   exclusions pick it up. No mirror posting, no unlink endpoint yet — a
   linked leg stays marked if the order is deleted (follow-up if needed).
+
+## 2026-09-16 — tax-lot resolution removed, trades and holdings separated
+
+- Supersedes the "lots CSV importer removed, cost data kept" entry above:
+  per direction, `investment_lots` stays dropped (`d0e1f2a3b4c5`), the
+  unused restore migration `e1f2a3b4c5d6` was deleted, and so are the
+  `/lots` endpoints, FIFO relief, and order/summary cost and gain fields.
+- `InvestmentOrder`s keep the raw purchase record (symbol, side, qty,
+  price, fees, proceeds) for trades analysis; `Holding`s are the separate
+  position ledger. Trade-analysis sell P&L uses a transient average buy
+  price computed per request — display only, nothing stored, no method
+  config. Rollback reverses holding deltas only.
+- Pre-removal DB with 15 lot rows kept at `/tmp/perfi-prelots-removal.db`.

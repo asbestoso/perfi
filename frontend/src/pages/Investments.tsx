@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { api } from "../main";
-import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, today, useGet } from "./_shared";
+import { btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, today, useGet } from "./_shared";
 
 function shares(milli: any) {
   return (Number(milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -212,16 +212,14 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
-      <Card title="Add order" hint="Orders create cost-basis lots and sell using FIFO. Fees default to $0.00 and date defaults to today. Link the cash txn # to keep its leg out of spending.">
+      <Card title="Add order" hint="Orders record buys and sells and move holdings. Fees default to $0.00 and date defaults to today. Link the cash txn # to keep its leg out of spending.">
         <AddOrder onDone={bump} accounts={accounts} />
       </Card>
       <Card title="Add holding">
         <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
       </Card>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-1">
         <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
-        <Stat label="Cost basis">{dollars(summary?.cost_cents)}</Stat>
-        <Stat label="Gain / loss"><Amt cents={summary?.gain_cents} /></Stat>
       </div>
       <Card title={`Positions (${positions.length})`}
         hint={refreshing ? "Updating prices..." : "Prices update automatically every hour."}>
