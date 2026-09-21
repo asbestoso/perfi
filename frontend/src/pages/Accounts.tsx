@@ -117,8 +117,8 @@ export default function Accounts() {
             <thead>
               <tr>
                 <th><button onClick={() => toggleSort("name")} className="font-semibold hover:text-pine-700">Name{arrow("name")}</button></th>
-                <th><button onClick={() => toggleSort("type")} className="font-semibold hover:text-pine-700">Type{arrow("type")}</button></th>
-                <th><button onClick={() => toggleSort("domain")} className="font-semibold hover:text-pine-700">Group{arrow("domain")}</button></th>
+                <th className="w-44"><button onClick={() => toggleSort("type")} className="font-semibold hover:text-pine-700">Type{arrow("type")}</button></th>
+                <th className="w-44"><button onClick={() => toggleSort("domain")} className="font-semibold hover:text-pine-700">Group{arrow("domain")}</button></th>
                 <th className="text-right"><button onClick={() => toggleSort("balance_cents")} className="font-semibold hover:text-pine-700">Balance{arrow("balance_cents")}</button></th>
               </tr>
             </thead>
@@ -127,9 +127,9 @@ export default function Accounts() {
                 <tr key={a.id}>
                   <td className="font-medium">
                     {isEditing(a, "name") ? (
-                      <form onSubmit={(e) => { e.preventDefault(); saveField(a, "name", draft); }} className="flex gap-1">
+                      <form onSubmit={(e) => { e.preventDefault(); saveField(a, "name", draft); }} className="flex max-w-md gap-1">
                         <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
-                          className={`${inputCls} w-48 py-1`} />
+                          className={`${inputCls} w-full py-1`} />
                         <button className={btnCls}>Save</button>
                       </form>
                     ) : (
@@ -141,7 +141,7 @@ export default function Accounts() {
                     {isEditing(a, "type") ? (
                       <select autoFocus value={draft}
                         onChange={(e) => saveField(a, "type", e.target.value)}
-                        className={`${inputCls} py-1`}>
+                        className={`${inputCls} w-full py-1`}>
                         {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                     ) : (
@@ -153,7 +153,7 @@ export default function Accounts() {
                     {isEditing(a, "domain") ? (
                       <select autoFocus value={draft}
                         onChange={(e) => saveField(a, "domain", e.target.value)}
-                        className={`${inputCls} py-1`}>
+                        className={`${inputCls} w-full py-1`}>
                         {DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
                       </select>
                     ) : (

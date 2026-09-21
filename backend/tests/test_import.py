@@ -51,6 +51,16 @@ def test_holding_profile_requires_and_persists_account_mapping(db):
     assert db.query(models.Holding).count() == 1
 
 
+def test_holding_import_saves_mapping_once_per_label(db):
+    raw = (b"Account,Holding,Quantity\n"
+           b"Brokerage Alpha,VTI,12.5\n"
+           b"Brokerage Alpha,VOO,3\n")
+    result = import_csv(db, None, raw, profile="Holding",
+                        mapping={"accounts": {"Brokerage Alpha": 1}})
+    assert result["updated"] == 2
+    assert db.query(models.ImportAccountMapping).count() == 1
+
+
 def test_holding_scan_returns_external_accounts_and_saved_mapping(store, client):
     client.post("/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
                 files={"file": ("holdings.csv", b"Account,Holding,Quantity\nBrokerage Alpha,VTI,1\n",

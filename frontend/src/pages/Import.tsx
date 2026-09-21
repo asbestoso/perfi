@@ -135,8 +135,8 @@ function UploadForm({ onDone }: any) {
       const created = await api("/api/accounts", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: label.trim(), type: "brokerage",
-          domain: "investing", balance_cents: 0,
+          name: label.trim(), type: "other",
+          domain: "mixed", balance_cents: 0,
         }),
       });
       setHoldingAccounts((current: any[]) => [
@@ -332,8 +332,8 @@ function UploadForm({ onDone }: any) {
             <h3 className="font-medium text-slate-800">Map imported accounts</h3>
             <p className="mt-1 text-sm text-slate-500">
               Choose the account in Perfi that corresponds to each account in this file,
-              or create a new one from the dropdown. New accounts are brokerage /
-              investing. Saved matches are preselected for future imports.
+              or create a new one from the dropdown. New accounts are other /
+              mixed. Saved matches are preselected for future imports.
             </p>
           </div>
           <div className="space-y-2">
@@ -353,11 +353,19 @@ function UploadForm({ onDone }: any) {
                   className={inputCls}
                 >
                   <option value="">Select a Perfi account…</option>
-                  {holdingAccounts.map((account: any) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name} · {account.type}
-                    </option>
-                  ))}
+                  {[...new Set(holdingAccounts.map((account: any) => account.type || "other"))].map(
+                    (group: string) => (
+                      <optgroup key={group} label={group}>
+                        {holdingAccounts
+                          .filter((account: any) => (account.type || "other") === group)
+                          .map((account: any) => (
+                            <option key={account.id} value={account.id}>
+                              {account.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                    )
+                  )}
                   <option value="__new__">
                     {creatingAccount === item.label ? "Creating…" : `+ New account "${item.label}"`}
                   </option>
@@ -379,7 +387,10 @@ function UploadForm({ onDone }: any) {
           <div className="mt-5 border-t border-slate-200 pt-4">
             <h4 className="mb-2 text-sm font-medium text-slate-700">Holdings to import</h4>
             <div className="space-y-1">
-              {holdingRows.filter((row: any) => !row.known).map((row: any) => {
+              {holdingRows.filter((row: any) => !row.known).sort((a: any, b: any) =>
+                (Number(String(a.quantity || "").replace(/,/g, "")) || 0) -
+                (Number(String(b.quantity || "").replace(/,/g, "")) || 0)
+              ).map((row: any) => {
                 const accountSkipped = discardedHoldingAccounts.has(row.account);
                 const rowSkipped = discardedHoldingRows.has(row.id);
                 const skipped = accountSkipped || rowSkipped;

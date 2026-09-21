@@ -274,6 +274,7 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
     changed = 0
     seen = set()
     previous = []
+    saved_mappings = {}
     for row in active_rows:
         label = (row.get(mapping.get("account", "Account")) or "").strip()
         symbol = (row.get(mapping.get("symbol", "Holding")) or "").strip().upper()
@@ -305,6 +306,9 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
             holding.quantity_milli = quantity
             holding.import_batch_id = batch.id
         changed += 1
+        if label in saved_mappings:
+            continue
+        saved_mappings[label] = True
         existing = db.query(ImportAccountMapping).filter_by(
             profile="Holding", external_label=label).one_or_none()
         if existing is None:
