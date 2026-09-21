@@ -61,9 +61,28 @@ export default function Accounts() {
   const [editing, setEditing] = useState<{ id: number; field: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [msg, setMsg] = useState("");
+  const [sortKey, setSortKey] = useState("name");
+  const [sortDir, setSortDir] = useState<1 | -1>(1);
   const data = useGet(`/api/accounts?limit=500&tick=${tick}`);
   const items = data?.items || [];
   const total = items.reduce((s: number, a: any) => s + Number(a.balance_cents || 0), 0);
+  function toggleSort(key: string) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 1 ? -1 : 1));
+    } else {
+      setSortKey(key);
+      setSortDir(1);
+    }
+  }
+  const rows = [...items].sort((a: any, b: any) => {
+    const av = sortKey === "balance_cents" ? Number(a.balance_cents || 0) : String(a[sortKey] ?? "");
+    const bv = sortKey === "balance_cents" ? Number(b.balance_cents || 0) : String(b[sortKey] ?? "");
+    if (typeof av === "number" || typeof bv === "number") return (Number(av) - Number(bv)) * sortDir;
+    return String(av).localeCompare(String(bv)) * sortDir;
+  });
+  function arrow(key: string) {
+    return sortKey === key ? (sortDir === 1 ? " ▲" : " ▼") : "";
+  }
   function startEdit(a: any, field: string) {
     setEditing({ id: a.id, field });
     setDraft(field === "name" ? a.name : field === "type" ? a.type : a.domain);
@@ -97,11 +116,14 @@ export default function Accounts() {
           <table className={tblCls}>
             <thead>
               <tr>
-                <th>Name</th><th>Type</th><th>Group</th><th className="text-right">Balance</th>
+                <th><button onClick={() => toggleSort("name")} className="font-semibold hover:text-pine-700">Name{arrow("name")}</button></th>
+                <th><button onClick={() => toggleSort("type")} className="font-semibold hover:text-pine-700">Type{arrow("type")}</button></th>
+                <th><button onClick={() => toggleSort("domain")} className="font-semibold hover:text-pine-700">Group{arrow("domain")}</button></th>
+                <th className="text-right"><button onClick={() => toggleSort("balance_cents")} className="font-semibold hover:text-pine-700">Balance{arrow("balance_cents")}</button></th>
               </tr>
             </thead>
             <tbody>
-              {items.map((a: any) => (
+              {rows.map((a: any) => (
                 <tr key={a.id}>
                   <td className="font-medium">
                     {isEditing(a, "name") ? (

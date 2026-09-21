@@ -315,9 +315,11 @@ def holdings_import_scan(file: UploadFile, db=Depends(get_db)):
             "quantity": (row.get("Quantity") or "").strip(),
             "known": symbol in known_symbols,
         })
+    live_ids = {row[0] for row in db.query(models.Account.id).all()}
     saved = {
         item.external_label: item.account_id
         for item in db.query(models.ImportAccountMapping).filter_by(profile="Holding").all()
+        if item.account_id in live_ids
     }
     accounts = [
         {"id": account.id, "name": account.name, "type": account.type,

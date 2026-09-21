@@ -233,9 +233,11 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
     labels = sorted({(row.get(mapping.get("account", "Account")) or "").strip()
                      for row in active_rows})
     labels = [label for label in labels if label]
+    live_ids = {row[0] for row in db.query(Account.id).all()}
     saved = {
         item.external_label: item.account_id
         for item in db.query(ImportAccountMapping).filter_by(profile="Holding").all()
+        if item.account_id in live_ids
     }
     unresolved = []
     resolved = {}

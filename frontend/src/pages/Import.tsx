@@ -128,6 +128,33 @@ function UploadForm({ onDone }: any) {
   const [discardedHoldingRows, setDiscardedHoldingRows] = useState<Set<number>>(new Set());
   const [holdingScanning, setHoldingScanning] = useState(false);
   const [holdingImporting, setHoldingImporting] = useState(false);
+  const [creatingAccount, setCreatingAccount] = useState<string | null>(null);
+  async function createAccountForImport(label: string) {
+    setCreatingAccount(label);
+    try {
+      const created = await api("/api/accounts", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: label.trim(), type: "brokerage",
+          domain: "investing", balance_cents: 0,
+        }),
+      });
+      setHoldingAccounts((current: any[]) => [
+        ...current,
+        { id: created.id, name: created.name, type: created.type, domain: created.domain },
+      ]);
+      setHoldingMapping((current: any) => ({ ...current, [label]: String(created.id) }));
+      setMsg("");
+    } catch (err: any) {
+      if (/: 409\b/.test(err.message || "")) {
+        setMsg(`An account named "${label}" already exists — pick it from the list.`);
+      } else {
+        setMsg(`Could not create account "${label}": ${err.message}`);
+      }
+    } finally {
+      setCreatingAccount(null);
+    }
+  }
   async function submit(e: any) {
     e.preventDefault();
     setMsg("Uploading…");
@@ -304,8 +331,9 @@ function UploadForm({ onDone }: any) {
           <div className="mb-3">
             <h3 className="font-medium text-slate-800">Map imported accounts</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Choose the account in Perfi that corresponds to each account in this file.
-              Saved matches are preselected for future imports.
+              Choose the account in Perfi that corresponds to each account in this file,
+              or create a new one from the dropdown. New accounts are brokerage /
+              investing. Saved matches are preselected for future imports.
             </p>
           </div>
           <div className="space-y-2">
@@ -315,7 +343,13 @@ function UploadForm({ onDone }: any) {
                 <select
                   value={holdingMapping[item.label] || ""}
                   disabled={discardedHoldingAccounts.has(item.label)}
-                  onChange={(e) => setHoldingMapping((current) => ({ ...current, [item.label]: e.target.value }))}
+                  onChange={(e) => {
+                    if (e.target.value === "__new__") {
+                      createAccountForImport(item.label);
+                      return;
+                    }
+                    setHoldingMapping((current) => ({ ...current, [item.label]: e.target.value }));
+                  }}
                   className={inputCls}
                 >
                   <option value="">Select a Perfi account…</option>
@@ -324,6 +358,9 @@ function UploadForm({ onDone }: any) {
                       {account.name} · {account.type}
                     </option>
                   ))}
+                  <option value="__new__">
+                    {creatingAccount === item.label ? "Creating…" : `+ New account "${item.label}"`}
+                  </option>
                 </select>
                 <button
                   type="button"

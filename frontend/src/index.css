@@ -42,6 +42,14 @@ table.ledger > thead > tr > th:last-child,
 table.ledger > tbody > tr > td:last-child {
   padding-right: 0;
 }
+/* Tailwind alignment utilities lose to the `th` rule above on specificity,
+   so re-assert them for headers that opt in (e.g. numeric columns). */
+table.ledger > thead > tr > th.text-right {
+  text-align: right;
+}
+table.ledger > thead > tr > th.text-center {
+  text-align: center;
+}
 table.ledger > tbody > tr > td {
   padding: 0.55rem 0.75rem 0.55rem 0;
   vertical-align: middle;

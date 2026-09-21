@@ -1,11 +1,14 @@
 """Destructive maintenance: wipe all user data, reseed defaults."""
 from ..models import Account, Category, CategoryRule
-from ..models import Holding, ImportBatch
+from ..models import (Holding, ImportAccountMapping, ImportBatch,
+                      InvestmentAllocation, InvestmentClassification,
+                      InvestmentOrder)
 from ..models import StagingRow, Transaction
 
 # Children before parents (SQLite does not enforce FKs here, but keep it safe).
-WIPED = (StagingRow, Transaction, CategoryRule, ImportBatch,
-         Holding, Account, Category)
+WIPED = (StagingRow, Transaction, CategoryRule, ImportAccountMapping,
+         ImportBatch, InvestmentAllocation, InvestmentClassification,
+         InvestmentOrder, Holding, Account, Category)
 
 
 def clear_database(db):

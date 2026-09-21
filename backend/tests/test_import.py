@@ -402,3 +402,16 @@ def test_monarch_ground_truth_end_to_end(store, client):
 
     elapsed = time.time() - started
     assert elapsed < 120, f"7151-row import took {elapsed:.1f}s"
+
+
+def test_holding_scan_ignores_saved_mapping_for_deleted_account(store, client):
+    client.post("/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Ghost%22%3A1%7D%7D",
+                files={"file": ("holdings.csv", b"Account,Holding,Quantity\nGhost,VTI,1\n",
+                                "text/csv")})
+    client.post("/api/admin/clear")
+    body = client.post(
+        "/api/import/holdings/scan",
+        files={"file": ("holdings.csv", b"Account,Holding,Quantity\nGhost,VTI,1\n",
+                                "text/csv")},
+    ).json()
+    assert body["external_accounts"][0]["saved_account_id"] is None
