@@ -1,6 +1,4 @@
 """Categorization tiers: user rules -> builtin rules -> merchant map -> Uncategorized.
-
-Phase 2: AI categorization (deferred).
 """
 import re
 

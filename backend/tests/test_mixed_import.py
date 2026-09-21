@@ -126,7 +126,9 @@ def test_robinhood_cash_rows_stage_outside_spend(store, client):
 
     merged = client.post(f"/api/import/batches/{body['batch_id']}/merge-all").json()
     assert merged == {"ok": True, "merged": 3}
-    spend = client.get("/api/reports/2023-12").json()["spend_by_category"]
+    spend = client.get(
+        "/api/transactions?date_from=2023-12-01&date_to=2023-12-31"
+        "&transaction_kind=expense").json()["items"]
     assert spend == []
     assert client.post("/api/import/batches/1/merge-all").json() == {
         "ok": True, "merged": 0}

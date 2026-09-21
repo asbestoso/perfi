@@ -35,16 +35,16 @@ which service died and why — that visibility is intentional, keep it.
 
 ## Database
 
-- Fresh start: Settings → Danger zone → Clear all data (wipes domain data,
-  keeps settings, reseeds categories), or delete `data/perfi.db*` and boot —
+- Fresh start: Settings → Danger zone → Clear all data (wipes data,
+  reseeds categories), or delete `data/perfi.db*` and boot —
   migrations + seed run on startup (11 categories).
 - **Migrations are incremental** (one revision per schema change on top of the
   `51171a03795c` squash). To change schema: edit `models.py`,
   `alembic revision --autogenerate`, adjust, verify with
   `alembic upgrade head` on an empty DB + `alembic check` (must report
   "No new upgrade operations detected").
-- Never commit `data/`: db files (`data/*.db*`) and the key
-  (`data/.ai_key`) are gitignored. `backend/data/` must never exist — if you
+- Never commit `data/`: db files (`data/*.db*`) are gitignored.
+  `backend/data/` must never exist — if you
   see it, some path helper regressed (see decisions log 2026-09-04).
 
 ## Tests & checks

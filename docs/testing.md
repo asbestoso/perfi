@@ -30,7 +30,7 @@ re-upload-skips-everything, plus a spot-check on two mapped rows.
 
 `cd frontend && npm run build`. Covers all pages compiling; nothing checks
 types. UI↔API wiring is verified by hand: boot the stack, open
-`http://localhost:5173`, walk Import → Transactions → Reports.
+`http://localhost:5173`, walk Import → Transactions → Investments.
 
 ## Scratch probes
 

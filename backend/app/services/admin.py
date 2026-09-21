@@ -1,15 +1,11 @@
-"""Destructive maintenance: wipe all user data, reseed defaults.
-
-User settings (AI key etc.) are preserved — only domain data goes.
-"""
-from ..models import Account, BalanceSnapshot, Budget, Category, CategoryRule
-from ..models import Holding, ImportBatch, Recurring
-from ..models import SavedReport, StagingRow, Transaction
+"""Destructive maintenance: wipe all user data, reseed defaults."""
+from ..models import Account, Category, CategoryRule
+from ..models import Holding, ImportBatch
+from ..models import StagingRow, Transaction
 
 # Children before parents (SQLite does not enforce FKs here, but keep it safe).
-WIPED = (StagingRow, Transaction, Budget, CategoryRule, ImportBatch,
-         Holding, Recurring, BalanceSnapshot, SavedReport,
-         Account, Category)
+WIPED = (StagingRow, Transaction, CategoryRule, ImportBatch,
+         Holding, Account, Category)
 
 
 def clear_database(db):

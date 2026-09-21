@@ -20,41 +20,38 @@ def test_investment_txns_excluded_from_spend(store, client):
         "transaction_kind": "investment_contribution"})
     assert r.status_code == 200
 
-    spend = client.get("/api/reports/2026-08").json()["spend_by_category"]
-    assert spend == [{"category_id": g, "total_cents": -1000}]
+    spend = client.get(
+        "/api/transactions?date_from=2026-08-01&date_to=2026-08-31").json()["items"]
+    assert [(s["merchant"], s["amount_cents"]) for s in spend
+            if s["transaction_kind"] in ("expense", "income")] == [
+        ("Whole Foods", -1000)]
 
-    body = client.get("/api/reports-trends?months=60").json()
-    by_month = {m["month"]: m for m in body}
-    assert by_month["2026-08"]["expense_cents"] == 1000
-
-    cat = client.get("/api/reports-category-trends?months=60").json()
-    i8 = cat["months"].index("2026-08")
-    series = {s["category"]: s["totals"][i8] for s in cat["series"]}
-    assert series["Groceries"] == -1000
+    default = client.get(
+        "/api/transactions?date_from=2026-08-01&date_to=2026-08-31").json()["items"]
+    assert {s["merchant"] for s in default} == {"Whole Foods", "VTI buy"}
 
 
-def test_investment_txns_excluded_from_budgets_and_recurring(store, client):
+def test_investment_txns_excluded_from_spending_view(store, client):
     g = store["cats"]["Groceries"]
-    unc = store["cats"]["Uncategorized"]
     inv = _investing_account(client)
-    client.post("/api/budgets", json={
-        "category_id": g, "month": "2026-08", "limit_cents": 50000})
     make_txn(client, store["acct"], g, -1000, "Whole Foods", "2026-08-05")
     r = client.post("/api/transactions", json={
         "account_id": inv, "category_id": g, "amount_cents": -40000,
         "merchant": "VTI buy", "date": "2026-08-06",
         "transaction_kind": "investment_contribution"})
     assert r.status_code == 200
-    b = client.get("/api/budgets/2026-08").json()[0]
-    assert b["spent_cents"] == 1000
 
-    for d in ("2026-06-01", "2026-07-01", "2026-08-01"):
-        r = client.post("/api/transactions", json={
-            "account_id": inv, "category_id": unc, "amount_cents": -999,
-            "merchant": "Auto Invest", "date": d,
-            "transaction_kind": "investment_contribution"})
-        assert r.status_code == 200
-    assert client.post("/api/recurring/detect").json() == {"created": [], "updated": []}
+    spend = client.get(
+        "/api/transactions?date_from=2026-08-01&date_to=2026-08-31"
+        "&domain=spending").json()["items"]
+    assert [(s["merchant"], s["amount_cents"]) for s in spend] == [
+        ("Whole Foods", -1000)]
+
+    kind = client.get(
+        "/api/transactions?date_from=2026-08-01&date_to=2026-08-31"
+        "&transaction_kind=expense").json()["items"]
+    assert [(s["merchant"], s["amount_cents"]) for s in kind] == [
+        ("Whole Foods", -1000)]
 
 
 def test_net_worth_cash_excludes_investing_balances(store, client):
@@ -63,12 +60,10 @@ def test_net_worth_cash_excludes_investing_balances(store, client):
         "symbol": "VTI", "account_id": inv, "quantity_milli": 10000,
         "price_cents": 10000,
     }).status_code == 200
-    net = client.get("/api/reports/2026-08").json()["net_worth"]
-    assert net["cash_cents"] == 0  # brokerage balance is not cash
-    assert net["net_worth_cents"] == net["cash_cents"] + net["investments_cents"]
-    snap = client.post("/api/snapshots/run").json()
-    assert snap["cash_cents"] == 0
-    assert snap["net_worth_cents"] == snap["investments_cents"]
+    accts = {a["name"]: a for a in client.get("/api/accounts").json()["items"]}
+    assert accts["Brokerage"]["domain"] == "investing"
+    # balance is derived from holdings (live-priced), not the raw cash balance
+    assert accts["Brokerage"]["balance_cents"] != 500000
 
 
 def test_report_domain_param(store, client):
@@ -83,22 +78,17 @@ def test_report_domain_param(store, client):
             "transaction_kind": kind})
         assert r.status_code == 200
 
-    default = client.get("/api/reports/2026-08").json()["spend_by_category"]
-    assert default == [{"category_id": g, "total_cents": -1000}]
-    everything = client.get("/api/reports/2026-08?domain=all").json()["spend_by_category"]
-    # domain=all widens the account axis; capital-flow kinds stay out of spend.
-    assert {s["category_id"]: s["total_cents"] for s in everything}[g] == -3000
-    only_inv = client.get("/api/reports/2026-08?domain=investing").json()["spend_by_category"]
-    assert only_inv == [{"category_id": g, "total_cents": -2000}]
-    assert client.get("/api/reports/2026-08?domain=nope").status_code == 422
-    assert client.get("/api/reports-trends?domain=nope").status_code == 422
-
-    r = client.post("/api/saved-reports", json={
-        "name": "All", "type": "spending",
-        "params": {"month": "2026-08", "domain": "all"}}).json()
-    out = client.post(f"/api/saved-reports/{r['id']}/run").json()
-    assert {s["category_id"]: s["total_cents"]
-            for s in out["spend_by_category"]}[g] == -3000
+    base = "/api/transactions?date_from=2026-08-01&date_to=2026-08-31"
+    default = client.get(base).json()["items"]
+    assert {(s["merchant"], s["amount_cents"]) for s in default} == {
+        ("Whole Foods", -1000), ("VTI buy", -50000), ("Advisory fee", -2000)}
+    only_inv = client.get(base + "&domain=investing").json()["items"]
+    assert {(s["merchant"], s["amount_cents"]) for s in only_inv} == {
+        ("VTI buy", -50000), ("Advisory fee", -2000)}
+    kinds = client.get(base + "&transaction_kind=expense").json()["items"]
+    assert {(s["merchant"], s["amount_cents"]) for s in kinds} == {
+        ("Whole Foods", -1000), ("Advisory fee", -2000)}
+    assert client.get(base + "&domain=nope").status_code == 422
 
 
 def test_order_cash_link_excludes_leg_from_spend(store, client):
@@ -115,8 +105,8 @@ def test_order_cash_link_excludes_leg_from_spend(store, client):
     })
     assert order.status_code == 200
     assert order.json()["linked_transaction_id"] == cash_leg["id"]
-    spend = client.get("/api/reports/2026-08").json()["spend_by_category"]
-    assert spend == []  # linked leg rides as a transfer, not spend
+    leg = client.get(f"/api/transactions/{cash_leg['id']}").json()
+    assert leg["transfer_id"] == f"order:{order.json()['id']}"
 
     again = client.post("/api/investment-orders", json={
         "account_id": inv, "symbol": "VTI", "side": "buy",

@@ -1,6 +1,6 @@
 """SQLAlchemy models. Money in INTEGER cents. Single-user (no auth tables)."""
 import datetime as dt
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -50,24 +50,6 @@ class Transaction(Base):
     fingerprint = Column(String(32), nullable=True, index=True)
     account = relationship("Account")
     category = relationship("Category", back_populates="transactions")
-
-
-class Budget(Base):
-    __tablename__ = "budgets"
-    id = Column(Integer, primary_key=True, nullable=False)
-    category_id = Column(ForeignKey("categories.id"), nullable=False)
-    month = Column(String(7), nullable=False)  # YYYY-MM
-    limit_cents = Column(Integer, nullable=False)
-    rollover = Column(Boolean, default=False, nullable=False)
-
-
-class Recurring(Base):
-    __tablename__ = "recurring"
-    id = Column(Integer, primary_key=True, nullable=False)
-    name = Column(String(120), nullable=False)
-    amount_cents = Column(Integer, nullable=False)
-    cadence = Column(String(20), default="monthly", nullable=False)
-    next_due = Column(Date, nullable=False)
 
 
 class Holding(Base):
@@ -149,33 +131,6 @@ class ImportAccountMapping(Base):
     __table_args__ = (
         UniqueConstraint("profile", "external_label"),
     )
-
-
-class BalanceSnapshot(Base):
-    """One daily net-worth data point. Upserted by the snapshot job."""
-    __tablename__ = "balance_snapshots"
-    id = Column(Integer, primary_key=True)
-    date = Column(Date, nullable=False, unique=True)
-    cash_cents = Column(Integer, nullable=False, default=0)
-    investments_cents = Column(Integer, nullable=False, default=0)
-    net_worth_cents = Column(Integer, nullable=False, default=0)
-
-
-class UserSetting(Base):
-    """Key-value settings. Secrets (AI key) stored Fernet-encrypted."""
-    __tablename__ = "user_settings"
-    key = Column(String(80), primary_key=True, nullable=False)
-    value = Column(Text, nullable=False, default="")
-
-
-class SavedReport(Base):
-    """Named report with stored params. Types: spending, trends, net_worth, category_trends."""
-    __tablename__ = "saved_reports"
-    id = Column(Integer, primary_key=True)
-    name = Column(String(120), nullable=False)
-    type = Column(String(40), nullable=False)
-    params = Column(Text, nullable=False, default="{}")
-    created_at = Column(DateTime, default=dt.datetime.utcnow, nullable=False)
 
 
 class StagingRow(Base):

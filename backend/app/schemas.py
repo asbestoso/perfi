@@ -145,35 +145,6 @@ class StagingRowRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class BudgetCreate(BaseModel):
-    category_id: int
-    month: str
-    limit_cents: int
-    rollover: bool = False
-
-
-class BudgetRead(BudgetCreate):
-    id: int
-    model_config = ConfigDict(from_attributes=True)
-
-
-class BudgetUpdate(BaseModel):
-    limit_cents: Optional[int] = None
-    rollover: Optional[bool] = None
-
-
-class RecurringCreate(BaseModel):
-    name: str
-    amount_cents: int
-    cadence: str = "monthly"
-    next_due: dt.date
-
-
-class RecurringRead(RecurringCreate):
-    id: int
-    model_config = ConfigDict(from_attributes=True)
-
-
 class HoldingCreate(BaseModel):
     symbol: str
     name: Optional[str] = None
@@ -202,35 +173,3 @@ class OrderRead(OrderCreate):
     id: int
     proceeds_cents: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)
-
-
-class SavedReportCreate(BaseModel):
-    name: str
-    type: str
-    params: dict = {}
-
-
-class SavedReportRead(SavedReportCreate):
-    id: int
-    created_at: dt.datetime
-    model_config = ConfigDict(from_attributes=True)
-
-    @field_validator("params", mode="before")
-    @classmethod
-    def _parse_params(cls, v):
-        import json
-        return json.loads(v) if isinstance(v, str) else v
-
-
-class AISettingsRead(BaseModel):
-    provider: str
-    model: str
-    base_url: str
-    has_key: bool
-
-
-class AISettingsUpdate(BaseModel):
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None

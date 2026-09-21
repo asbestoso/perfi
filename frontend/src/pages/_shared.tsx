@@ -9,21 +9,6 @@ export function useGet(path: string) {
   return data;
 }
 
-/* Recharts palette: pine income, brick expense, ink net. */
-export const chart = {
-  income: "#1d7a44",
-  expense: "#b91c1c",
-  net: "#101820",
-  grid: "#dde3da",
-  tick: "#64748b",
-};
-
-export const tooltipStyle = {
-  borderRadius: 10,
-  border: "1px solid #e2e8f0",
-  fontSize: 13,
-};
-
 export function Page({ title, sub, children }: any) {
   return (
     <main className="mx-auto max-w-6xl space-y-5 px-4 py-8 md:px-8">
@@ -105,11 +90,6 @@ export function dollars(cents: any) {
   });
 }
 
-export function thisMonth() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 export function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -129,4 +109,3 @@ export const btnSmCls =
 export const btnDangerCls =
   "rounded-lg bg-red-700 px-3.5 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-red-600";
 export const tblCls = "ledger w-full text-sm";
-export const numCls = "text-right tabular-nums";

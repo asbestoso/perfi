@@ -63,13 +63,11 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
   with an equal/containing merchant — as `pending` with reasons.
   `merge-all` stays the force path (merges everything but exact dupes).
 - **Categorization tiers**: trusted file category → regex rules
-  (`CategoryRule`, seed patterns in `categorization.py`) → BYOK AI (last tier,
-  never overwrites `manual`) → Uncategorized.
+  (`CategoryRule`, seed patterns in `categorization.py`) → builtin merchant
+  patterns → Uncategorized.
 - **Transfers**: opposite-sign same-amount pairs across accounts link via
   `transfer_id`; linked rows are excluded from spend/analytics. Suggestions at
   `GET /api/transfers/suggestions`, shown on the Transactions page.
-- **Budgets**: per-category monthly limits with Monarch-style flexible
-  rollover; `budget_status` returns limit/spent/remaining/pace per row.
 - **Investments**: holdings and trades are separate. `Holding`s carry live
   price/qty and are moved by orders; `InvestmentOrder`s record raw
   buy/sell trades (price, fees, proceeds) with no tax-lot resolution —
@@ -79,24 +77,16 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
   link one cash `Transaction` via `linked_transaction_id`; the linked
   leg gets `transfer_id=order:<id>` so it leaves spend totals.
 - **Domains**: every `Account` has a `domain` (`spending` | `investing` |
-  `mixed`; backfilled from type, user-overridable). Spend queries
-  (`month_spent`, `monthly_spend`, `monthly_trends`, `category_trends`,
-  `budget_status`, `detect_recurring`) exclude investing-domain accounts by
-  default and accept `domain=` (`spending` view, a single domain, or `all`).
+  `mixed`; backfilled from type, user-overridable). Spend views
+  exclude investing-domain accounts by default (the Transactions page
+  carries a Group domain selector; list endpoints accept `domain=`
+  for a single domain or `all`).
   A second axis, `Transaction.transaction_kind` (`expense`, `income`,
   `investment_contribution`, `investment_distribution`), keeps capital flows
   out of spend even when the domain is widened.
 - **Net worth**: cash sums `spending` + `mixed` balances only — investing
   accounts contribute via holdings (`portfolio_value`), never via balance,
-  so the two sides can't double-count. `POST /api/snapshots/run` records
-  the same split; history chart needs at least one snapshot — nothing is
-  scheduled.
-
-## Secrets
-
-AI API key is Fernet-encrypted at rest. Key resolution: `PERFI_ENCRYPTION_KEY`
-env, else `data/.ai_key` (0600, auto-created, gitignored). Losing it orphans
-the stored key.
+  so the two sides can't double-count.
 
 ## Frontend map
 
@@ -105,7 +95,6 @@ The sidebar groups links into Overview / Spending / Investing / Manage
 (top bar stays flat). `pages/_shared.tsx` owns `Page`, `Card`, `useGet`,
 `dollars`, input/button classes. Pages are otherwise independent; after a
 mutation they bump a `tick` state appended to the query string to refetch
-(same pattern as Import). Dashboard is the combined overview (net worth +
-spending + portfolio cards with drill links); Import has Activity /
-Brokerage tabs; Reports and Transactions carry a Group (domain) selector
-and saved reports store `params.domain`.
+(same pattern as Import). Dashboard links out to spending and portfolio
+pages plus accounts; Import has Activity / Brokerage tabs;
+Transactions carries a Group (domain) selector.

@@ -10,7 +10,7 @@ from sqlalchemy import func, or_, select
 from ... import models, schemas
 from ..deps import get_db
 from ..pagination import pagination
-from ...services import ai_provider, analytics, reconcile, settings_store
+from ...services import analytics, reconcile
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
 from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
@@ -587,59 +587,6 @@ def export_transactions(account_id=None, date_from=None, date_to=None, db=Depend
     return Response(content=buf.getvalue(), media_type="text/csv")
 
 
-@router.get("/budgets/{month}")
-def budgets(month: str, domain=None, db=Depends(get_db)):
-    if domain is not None:
-        _check_domain_param(domain)
-    return analytics.budget_status(db, month, domain)
-
-
-@router.post("/budgets", response_model=schemas.BudgetRead)
-def create_budget(payload: schemas.BudgetCreate, db=Depends(get_db)):
-    b = models.Budget(**payload.model_dump())
-    db.add(b); db.commit(); db.refresh(b)
-    return b
-
-
-@router.put("/budgets/{id}", response_model=schemas.BudgetRead)
-def update_budget(id, payload: schemas.BudgetUpdate, db=Depends(get_db)):
-    b = _get_or_404(db, models.Budget, _as_int(id, "id"))
-    for k, v in payload.model_dump(exclude_unset=True).items():
-        setattr(b, k, v)
-    db.commit()
-    db.refresh(b)
-    return b
-
-
-@router.delete("/budgets/{id}")
-def delete_budget(id, db=Depends(get_db)):
-    b = _get_or_404(db, models.Budget, _as_int(id, "id"))
-    db.delete(b)
-    db.commit()
-    return {"ok": True}
-
-
-@router.get("/recurring", response_model=schemas.Page[schemas.RecurringRead])
-def list_recurring(paging=Depends(pagination), db=Depends(get_db)):
-    limit, offset = paging
-    total = db.scalar(select(func.count()).select_from(models.Recurring)) or 0
-    items = db.scalars(select(models.Recurring).order_by(
-        models.Recurring.next_due).limit(limit).offset(offset)).all()
-    return {"items": items, "total": total}
-
-
-@router.post("/recurring/detect")
-def detect_recurring(db=Depends(get_db)):
-    return analytics.detect_recurring(db)
-
-
-@router.post("/recurring", response_model=schemas.RecurringRead)
-def create_recurring(payload: schemas.RecurringCreate, db=Depends(get_db)):
-    r = models.Recurring(**payload.model_dump())
-    db.add(r); db.commit(); db.refresh(r)
-    return r
-
-
 @router.get("/investments")
 def investments(db=Depends(get_db)):
     holdings = db.scalars(select(models.Holding)).all()
@@ -958,99 +905,3 @@ def delete_rule(id, db=Depends(get_db)):
     db.delete(r)
     db.commit()
     return {"ok": True}
-
-
-@router.get("/reports/{month}")
-def reports(month: str, domain=None, db=Depends(get_db)):
-    if domain is not None:
-        _check_domain_param(domain)
-    return {"month": month,
-            "spend_by_category": analytics.monthly_spend(db, month, domain),
-            "budgets": analytics.budget_status(db, month, domain),
-            "net_worth": analytics.net_worth(db)}
-
-
-@router.get("/reports-trends")
-def reports_trends(months=12, domain=None, db=Depends(get_db)):
-    try:
-        n = int(months)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="months must be an integer")
-    if domain is not None:
-        _check_domain_param(domain)
-    return analytics.monthly_trends(db, n, domain)
-
-
-@router.get("/reports-category-trends")
-def reports_category_trends(months=6, domain=None, db=Depends(get_db)):
-    try:
-        n = int(months)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="months must be an integer")
-    if domain is not None:
-        _check_domain_param(domain)
-    return analytics.category_trends(db, n, domain)
-
-
-@router.get("/net-worth-history")
-def net_worth_history(db=Depends(get_db)):
-    return analytics.net_worth_history(db)
-
-
-@router.post("/snapshots/run")
-def run_snapshot(db=Depends(get_db)):
-    return analytics.snapshot_balances(db)
-
-
-@router.get("/saved-reports", response_model=list[schemas.SavedReportRead])
-def list_saved_reports(db=Depends(get_db)):
-    return db.query(models.SavedReport).order_by(models.SavedReport.id).all()
-
-
-@router.post("/saved-reports", response_model=schemas.SavedReportRead)
-def create_saved_report(payload: schemas.SavedReportCreate, db=Depends(get_db)):
-    import json
-    if payload.type not in analytics.REPORT_TYPES:
-        raise HTTPException(status_code=422, detail=f"unknown report type: {payload.type}")
-    try:
-        params = json.dumps(payload.params or {})
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="params must be JSON-serializable")
-    r = models.SavedReport(name=payload.name, type=payload.type, params=params)
-    db.add(r); db.commit(); db.refresh(r)
-    return r
-
-
-@router.delete("/saved-reports/{id}")
-def delete_saved_report(id, db=Depends(get_db)):
-    r = _get_or_404(db, models.SavedReport, _as_int(id, "id"))
-    db.delete(r)
-    db.commit()
-    return {"ok": True}
-
-
-@router.post("/saved-reports/{id}/run")
-def run_saved_report(id, db=Depends(get_db)):
-    import json
-    r = _get_or_404(db, models.SavedReport, _as_int(id, "id"))
-    return analytics.run_report(db, r.type, json.loads(r.params or "{}"))
-
-
-@router.get("/settings/ai", response_model=schemas.AISettingsRead)
-def get_ai_settings(db=Depends(get_db)):
-    return settings_store.get_ai_config(db)
-
-
-@router.put("/settings/ai", response_model=schemas.AISettingsRead)
-def update_ai_settings(payload: schemas.AISettingsUpdate, db=Depends(get_db)):
-    return settings_store.set_ai_config(db, **payload.model_dump(exclude_unset=True))
-
-
-@router.post("/ai/categorize")
-def ai_categorize(limit=20, min_confidence=0.7, db=Depends(get_db)):
-    try:
-        n = int(limit)
-        threshold = float(min_confidence)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="limit must be an integer and min_confidence a number")
-    return ai_provider.categorize_uncategorized(db, limit=n, min_confidence=threshold)

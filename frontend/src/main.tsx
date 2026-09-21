@@ -5,13 +5,10 @@ import "./index.css";
 import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Accounts from "./pages/Accounts";
-import Budgets from "./pages/Budgets";
-import Recurring from "./pages/Recurring";
 import Investments from "./pages/Investments";
 import InvestmentAnalysis from "./pages/InvestmentAnalysis";
 import TradeAnalysis from "./pages/TradeAnalysis";
 import Import from "./pages/Import";
-import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 
 export async function api(path: string, opts?: RequestInit) {
@@ -20,28 +17,25 @@ export async function api(path: string, opts?: RequestInit) {
   return r.json();
 }
 
-const LINKS = ["", "transactions", "accounts", "budgets", "recurring",
-               "investments", "portfolio-analysis", "trade-analysis", "import", "reports", "settings"];
+const LINKS = ["", "transactions", "accounts",
+               "investments", "portfolio-analysis", "trade-analysis", "import", "settings"];
 
 const LABELS: Record<string, string> = {
   "": "dashboard",
   transactions: "spending",
   accounts: "accounts",
-  budgets: "budgets",
-  recurring: "recurring",
   investments: "portfolio",
   "portfolio-analysis": "allocation",
   "trade-analysis": "trades",
   import: "import",
-  reports: "reports",
   settings: "settings",
 };
 
 const SECTIONS: { title: string; links: string[] }[] = [
   { title: "Overview", links: [""] },
-  { title: "Spending", links: ["transactions", "budgets", "recurring"] },
+  { title: "Spending", links: ["transactions"] },
   { title: "Investing", links: ["investments", "portfolio-analysis", "trade-analysis"] },
-  { title: "Manage", links: ["accounts", "import", "reports", "settings"] },
+  { title: "Manage", links: ["accounts", "import", "settings"] },
 ];
 
 function linkItem(l: string, activeCls: (a: boolean) => string) {
@@ -102,14 +96,11 @@ function Shell() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/accounts" element={<Accounts />} />
-          <Route path="/budgets" element={<Budgets />} />
-          <Route path="/recurring" element={<Recurring />} />
           <Route path="/investments" element={<Investments />} />
           <Route path="/portfolio-analysis" element={<InvestmentAnalysis />} />
           <Route path="/investment-analysis" element={<Navigate to="/portfolio-analysis" replace />} />
           <Route path="/trade-analysis" element={<TradeAnalysis />} />
           <Route path="/import" element={<Import />} />
-          <Route path="/reports" element={<Reports />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>

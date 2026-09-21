@@ -115,7 +115,7 @@ function Rules({ tick, bump, categories }: any) {
       </form>
       <Error data={data} />
       {items.length === 0 ? (
-        <p className="text-sm text-slate-500">No rules — matching transactions fall back to AI or Uncategorized.</p>
+        <p className="text-sm text-slate-500">No rules — unmatched transactions stay Uncategorized.</p>
       ) : (
         <ul className="divide-y divide-slate-100 text-sm">
           {items.map((r: any) => (
@@ -126,71 +126,6 @@ function Rules({ tick, bump, categories }: any) {
           ))}
         </ul>
       )}
-    </Card>
-  );
-}
-
-function AI({ tick, bump }: any) {
-  const data = useGet(`/api/settings/ai?tick=${tick}`);
-  const [form, setForm] = useState({ provider: "", model: "", base_url: "", api_key: "" });
-  const [msg, setMsg] = useState("");
-  const set = (k: string) => (e: any) => setForm({ ...form, [k]: e.target.value });
-
-  async function save(e: any) {
-    e.preventDefault();
-    const body: any = {};
-    for (const k of ["provider", "model", "base_url", "api_key"]) {
-      if ((form as any)[k]) body[k] = (form as any)[k];
-    }
-    try {
-      await api("/api/settings/ai", {
-        method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      setForm({ provider: "", model: "", base_url: "", api_key: "" });
-      setMsg("Saved.");
-      bump();
-    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
-  }
-  async function categorize() {
-    setMsg("Categorizing…");
-    try {
-      const r = await api("/api/ai/categorize?limit=20&min_confidence=0.7", { method: "POST" });
-      setMsg(`Done: ${JSON.stringify(r)}`);
-    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
-  }
-
-  return (
-    <Card title="AI categorization (BYOK)">
-      <Error data={data} />
-      {data && !data.error && (
-        <p className="mb-3 text-sm text-slate-600">
-          Provider: <b>{data.provider}</b> · Model: <b>{data.model || "—"}</b> ·
-          Key: <b>{data.has_key ? "set" : "missing"}</b>
-        </p>
-      )}
-      <form onSubmit={save} className="flex flex-wrap items-end gap-2">
-        <label className="text-sm">Provider
-          <input value={form.provider} onChange={set("provider")} placeholder="openai / ollama"
-            className={`${inputCls} ml-1 w-32`} />
-        </label>
-        <label className="text-sm">Model
-          <input value={form.model} onChange={set("model")} placeholder="gpt-4o-mini"
-            className={`${inputCls} ml-1 w-36`} />
-        </label>
-        <label className="text-sm">Base URL
-          <input value={form.base_url} onChange={set("base_url")} placeholder="http://localhost:11434/v1"
-            className={`${inputCls} ml-1 w-52`} />
-        </label>
-        <label className="text-sm">API key
-          <input type="password" value={form.api_key} onChange={set("api_key")}
-            placeholder={data?.has_key ? "(stored — leave blank to keep)" : ""}
-            className={`${inputCls} ml-1 w-44`} />
-        </label>
-        <button className={btnCls}>Save</button>
-        <button type="button" onClick={categorize} className={btnCls}>Categorize 20</button>
-      </form>
-      {msg && <p className="mt-2 text-sm text-slate-600">{msg}</p>}
     </Card>
   );
 }
@@ -222,7 +157,7 @@ function Export() {
 function DangerZone({ bump }: any) {
   const [msg, setMsg] = useState("");
   async function clear() {
-    if (!window.confirm("Delete ALL data (transactions, imports, budgets, accounts, categories)? Settings are kept. This cannot be undone.")) return;
+    if (!window.confirm("Delete ALL data (transactions, imports, accounts, categories)? Settings are kept. This cannot be undone.")) return;
     try {
       const r = await api("/api/admin/clear", { method: "POST" });
       const total = Object.values(r.deleted || {}).reduce((a: number, b: any) => a + Number(b), 0);
@@ -250,7 +185,6 @@ export default function Settings() {
     <Page title="Settings">
       <Categories tick={tick} bump={bump} />
       <Rules tick={tick} bump={bump} categories={categories} />
-      <AI tick={tick} bump={bump} />
       <Export />
       <DangerZone bump={bump} />
     </Page>

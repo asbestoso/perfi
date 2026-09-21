@@ -19,8 +19,8 @@ SQLite file: `data/perfi.db` (WAL, auto-created + seeded on startup).
 
 - `backend/app/` — FastAPI app: `main.py`, `config.py`, `database.py`,
   `models.py`, `schemas.py`, `seed.py`, `api/` routes, `services/` domain logic
-- `frontend/` — Vite + React pages: Dashboard, Transactions, Accounts, Budgets,
-  Recurring, Investments, Import, Reports, Settings
+- `frontend/` — Vite + React pages: Dashboard, Transactions, Accounts,
+  Investments, Import, Settings
 - `data/` — local SQLite dir (gitignored db files)
 - `scripts/dev.sh` — runs backend + frontend concurrently
 
@@ -32,24 +32,15 @@ SQLite file: `data/perfi.db` (WAL, auto-created + seeded on startup).
   signed amount + normalized merchant); Merge-safe auto-posts clean rows and
   holds only obvious near-dupes for review (`fingerprint.py`, `reconcile.py`).
 - **Categorization tiers**: trusted file category -> regex rules ->
-  BYOK AI (last tier, never overwrites manual) -> Uncategorized.
-- **Budgets**: monthly per-category limit cents + spend computed from transactions.
-- **Recurring**: detected/declared bills with cadence + next-due date.
+  builtin merchant patterns -> Uncategorized.
 - **Investments**: holdings (symbol, qty, price cents) + market value.
-- **Reports**: monthly spend by category, net worth, cash flow.
 - **Transfers**: paired transactions linked by `transfer_id` (excluded from spend).
 
 ## Configuration (env)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PERFI_ENCRYPTION_KEY` | auto | Fernet key for the stored AI key; else `data/.ai_key` |
 | `PERFI_LOG_LEVEL` | INFO | Log verbosity (DEBUG for full request + domain logs) |
-
-AI setup: `PUT /api/settings/ai` with provider (`openai`, `anthropic`,
-`google`, `custom`), model, and API key (stored encrypted, never returned).
-Then `POST /api/ai/categorize?limit=&min_confidence=` classifies only
-never-categorized transactions.
 
 ## Docs
 
