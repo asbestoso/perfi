@@ -2,7 +2,7 @@
 
 Standing constraints: local-only (no Docker/Postgres), single user (no auth),
 CSV-first import, flexible rollover, BYOK AI as last categorization tier that
-never overwrites manual labels, reads-first MCP. Python stays hint-free.
+never overwrites manual labels. Python stays hint-free.
 
 ## 2026-09-04 — review fixes (HIGHs fixed, MEDIUMs deferred)
 
@@ -14,7 +14,7 @@ never overwrites manual labels, reads-first MCP. Python stays hint-free.
 - `GET /api/import/batches/{id}` has `response_model=BatchDetailRead`
   (`BatchRead` + `by_status`); response now includes `created_at`.
 - Deferred (MEDIUM, still open): unbounded export `.all()`, unbounded
-  `file.file.read()` on imports, MCP token `!=` → `hmac.compare_digest`.
+  `file.file.read()` on imports.
 
 ## 2026-09-04 — encryption key path bug
 

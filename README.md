@@ -43,17 +43,13 @@ SQLite file: `data/perfi.db` (WAL, auto-created + seeded on startup).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PERFI_MCP_ENABLED=1` | off | Expose `POST /api/mcp` (MCP, Streamable HTTP JSON-RPC) |
-| `PERFI_MCP_TOKEN` | -- | Required bearer token for MCP; missing token is a 503 |
-| `PERFI_MCP_WRITE_ENABLED=1` | off | Register MCP write tools (recategorize, set budget) |
 | `PERFI_ENCRYPTION_KEY` | auto | Fernet key for the stored AI key; else `data/.ai_key` |
 | `PERFI_LOG_LEVEL` | INFO | Log verbosity (DEBUG for full request + domain logs) |
 
 AI setup: `PUT /api/settings/ai` with provider (`openai`, `anthropic`,
 `google`, `custom`), model, and API key (stored encrypted, never returned).
 Then `POST /api/ai/categorize?limit=&min_confidence=` classifies only
-never-categorized transactions. MCP read tools work out of the box once
-enabled; write tools stay unlisted until explicitly enabled.
+never-categorized transactions.
 
 ## Docs
 

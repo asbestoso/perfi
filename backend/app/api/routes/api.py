@@ -3,14 +3,14 @@ import datetime as dt
 import calendar
 import math
 import re
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 
 from ... import models, schemas
 from ..deps import get_db
 from ..pagination import pagination
-from ...services import ai_provider, analytics, mcp_server, reconcile, settings_store
+from ...services import ai_provider, analytics, reconcile, settings_store
 from ...services.csv_import import import_csv
 from ...services.fingerprint import compute_fingerprint
 from ...services.market_data import QuoteUnavailableError, get_live_name, get_live_price
@@ -1054,19 +1054,3 @@ def ai_categorize(limit=20, min_confidence=0.7, db=Depends(get_db)):
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="limit must be an integer and min_confidence a number")
     return ai_provider.categorize_uncategorized(db, limit=n, min_confidence=threshold)
-
-
-@router.post("/mcp")
-def mcp_endpoint(payload: dict, request: Request, db=Depends(get_db)):
-    if not mcp_server.mcp_enabled():
-        raise HTTPException(status_code=404, detail="MCP disabled (set PERFI_MCP_ENABLED=1)")
-    want = mcp_server.expected_token()
-    if not want:
-        raise HTTPException(status_code=503, detail="MCP misconfigured (set PERFI_MCP_TOKEN)")
-    got = (request.headers.get("authorization") or "")
-    if got != f"Bearer {want}":
-        raise HTTPException(status_code=401, detail="bad MCP token")
-    out = mcp_server.handle(db, payload)
-    if out is None:
-        return Response(status_code=202)
-    return out

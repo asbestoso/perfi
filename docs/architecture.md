@@ -96,8 +96,7 @@ queue on the Import page, and merging (`services/reconcile.py`) inserts
 
 AI API key is Fernet-encrypted at rest. Key resolution: `PERFI_ENCRYPTION_KEY`
 env, else `data/.ai_key` (0600, auto-created, gitignored). Losing it orphans
-the stored key. MCP is reads-first behind `PERFI_MCP_*` gates; Bearer compared
-with `hmac.compare_digest`.
+the stored key.
 
 ## Frontend map
 
