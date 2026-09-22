@@ -504,7 +504,7 @@ export default function Investments() {
             </thead>
             <tbody>
               {rows.map((p: any) => {
-                const expandable = (p.accounts?.length || 0) > 1;
+                const expandable = (p.accounts?.length || 0) > 1 || p.category === "Mixed";
                 const expanded = expandable && expandedSymbol === p.symbol;
                 return (
                 <Fragment key={p.symbol}>
@@ -512,7 +512,6 @@ export default function Investments() {
                   expandedSymbol === p.symbol ? "" : p.symbol
                 )} className={expandable ? "cursor-pointer hover:bg-slate-50" : undefined}>
                   <td className="font-medium">
-                    <span className="mr-2 text-slate-400">{expanded ? "▾" : expandable ? "▸" : ""}</span>
                     <span
                       title={p.name || holdingNames[p.symbol] || p.symbol}
                       onMouseEnter={() => loadHoldingName(p.symbol, p.name)}
@@ -545,9 +544,12 @@ export default function Investments() {
                   <td className="text-right">
                     <span onClick={(e) => e.stopPropagation()}>
                     <select value={p.category || ""}
-                      onChange={(e) => e.target.value === "Mixed"
-                        ? startAllocation(p.symbol, p.allocations)
-                        : categorize(p.symbol, e.target.value)}
+                      onChange={(e) => {
+                        if (e.target.value === "Mixed") {
+                          startAllocation(p.symbol, p.allocations);
+                          setExpandedSymbol(p.symbol);
+                        } else categorize(p.symbol, e.target.value);
+                      }}
                       className={`${inputCls} py-1`}>
                       <option value="">Uncategorized</option>
                       {categories.map((category) => <option key={category}>{category}</option>)}
@@ -575,6 +577,36 @@ export default function Investments() {
                       ) : (
                         <p className="mt-1 text-sm text-slate-500">No account holdings recorded.</p>
                       )}
+                      {p.category === "Mixed" && (
+                        <div className="mt-3 border-t border-slate-200 pt-3">
+                          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Category mix
+                          </div>
+                          {allocationSymbol === p.symbol ? (
+                            <div className="mt-2 flex flex-wrap items-end gap-2">
+                              {categories.map((category) => (
+                                <label key={category} className="text-xs text-slate-600">
+                                  {category} %
+                                  <input value={allocationDraft[category] || ""}
+                                    onChange={(e) => setAllocationDraft((current) => ({
+                                      ...current, [category]: e.target.value,
+                                    }))}
+                                    className={`${inputCls} ml-1 w-20 py-1`} inputMode="decimal" />
+                                </label>
+                              ))}
+                              <button type="button" onClick={saveAllocation} className={inputCls}>Save mix</button>
+                            </div>
+                          ) : (
+                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                              {Object.entries(p.allocations || {}).map(([category, percent]: any) => (
+                                <span key={category} className="tabular-nums">{category} {Number(percent).toFixed(0)}%</span>
+                              ))}
+                              <button type="button" onClick={() => startAllocation(p.symbol, p.allocations)}
+                                className="text-sm text-pine-700 hover:underline">Edit mix</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 )}
@@ -583,25 +615,6 @@ export default function Investments() {
                   <tr key={`${p.symbol}-edit-error`} onClick={(e) => e.stopPropagation()}>
                     <td colSpan={6} className="bg-slate-50 px-4 pb-3">
                       <p className="text-sm text-red-700">{editMsg}</p>
-                    </td>
-                  </tr>
-                )}
-                {allocationSymbol === p.symbol && (
-                  <tr onClick={(e) => e.stopPropagation()}>
-                    <td colSpan={6} className="bg-slate-50 px-4 py-3">
-                      <div className="flex flex-wrap items-end gap-2">
-                        {categories.map((category) => (
-                          <label key={category} className="text-xs text-slate-600">
-                            {category} %
-                            <input value={allocationDraft[category] || ""}
-                              onChange={(e) => setAllocationDraft((current) => ({
-                                ...current, [category]: e.target.value,
-                              }))}
-                              className={`${inputCls} ml-1 w-20 py-1`} inputMode="decimal" />
-                          </label>
-                        ))}
-                        <button type="button" onClick={saveAllocation} className={inputCls}>Save mix</button>
-                      </div>
                     </td>
                   </tr>
                 )}

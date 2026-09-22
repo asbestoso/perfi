@@ -225,3 +225,19 @@ def test_quote_cache_serves_repeat_summaries(client, monkeypatch):
     assert client.get("/api/investments/summary").status_code == 200
     assert calls == ["VTI"]
     market_data.clear_quote_cache()
+
+
+def test_summary_prunes_sold_holdings_from_today(client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 10000)
+    vti = client.post("/api/investments", json={
+        "symbol": "VTI", "quantity_milli": 10000}).json()
+    client.post("/api/investments", json={"symbol": "BND", "quantity_milli": 5000})
+
+    client.get("/api/investments/summary")
+    assert len(client.get("/api/investments/history").json()["points"]) == 2
+
+    client.patch(f"/api/investments/{vti['id']}", json={"quantity_milli": 0})
+    client.get("/api/investments/summary")
+    history = client.get("/api/investments/history").json()["points"]
+    assert [point["symbol"] for point in history] == ["BND"]
+    assert sum(point["market_cents"] for point in history) == 50000

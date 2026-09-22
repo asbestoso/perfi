@@ -727,7 +727,10 @@ def investments_summary(db=Depends(get_db)):
     db.commit()
     result = analytics.portfolio_summary(db)
     today = dt.date.today()
+    live = {}
     for holding in db.scalars(select(models.Holding)).all():
+        key = (holding.account_id, holding.symbol.upper())
+        live[key] = holding
         snapshot = db.scalar(select(models.PortfolioSnapshot).where(
             models.PortfolioSnapshot.date == today,
             models.PortfolioSnapshot.account_id == holding.account_id,
@@ -743,6 +746,10 @@ def investments_summary(db=Depends(get_db)):
             snapshot.quantity_milli = holding.quantity_milli
             snapshot.price_cents = holding.price_cents
             snapshot.market_cents = market
+    for stale in db.scalars(select(models.PortfolioSnapshot).where(
+            models.PortfolioSnapshot.date == today)).all():
+        if (stale.account_id, stale.symbol) not in live:
+            db.delete(stale)
     db.commit()
     return result
 
