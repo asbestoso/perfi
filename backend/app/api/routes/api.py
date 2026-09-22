@@ -2,6 +2,7 @@
 import datetime as dt
 import math
 import re
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select
@@ -696,18 +697,26 @@ def update_investment_allocation(symbol: str, payload: dict, db=Depends(get_db))
 
 @router.get("/investments/summary")
 def investments_summary(db=Depends(get_db)):
+    symbols = []
+    for holding in db.scalars(select(models.Holding)).all():
+        if holding.symbol.upper() not in symbols:
+            symbols.append(holding.symbol.upper())
+
+    def _safe_price(symbol):
+        try:
+            return get_live_price(symbol)
+        except QuoteUnavailableError:
+            return None
+
     prices = {}
+    if symbols:
+        with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as pool:
+            prices = dict(zip(symbols, pool.map(_safe_price, symbols)))
     names = {}
     for holding in db.scalars(select(models.Holding)).all():
         symbol = holding.symbol.upper()
-        if symbol in prices:
+        if prices.get(symbol) is not None:
             holding.price_cents = prices[symbol]
-            continue
-        try:
-            holding.price_cents = get_live_price(symbol)
-            prices[symbol] = holding.price_cents
-        except QuoteUnavailableError:
-            continue
         if not holding.name and symbol not in names:
             try:
                 names[symbol] = get_live_name(symbol)
@@ -716,7 +725,40 @@ def investments_summary(db=Depends(get_db)):
         if not holding.name and names.get(symbol):
             holding.name = names[symbol]
     db.commit()
-    return analytics.portfolio_summary(db)
+    result = analytics.portfolio_summary(db)
+    today = dt.date.today()
+    for holding in db.scalars(select(models.Holding)).all():
+        snapshot = db.scalar(select(models.PortfolioSnapshot).where(
+            models.PortfolioSnapshot.date == today,
+            models.PortfolioSnapshot.account_id == holding.account_id,
+            models.PortfolioSnapshot.symbol == holding.symbol.upper()))
+        market = (holding.quantity_milli * holding.price_cents) // 1000
+        if snapshot is None:
+            db.add(models.PortfolioSnapshot(
+                date=today, account_id=holding.account_id,
+                symbol=holding.symbol.upper(),
+                quantity_milli=holding.quantity_milli,
+                price_cents=holding.price_cents, market_cents=market))
+        else:
+            snapshot.quantity_milli = holding.quantity_milli
+            snapshot.price_cents = holding.price_cents
+            snapshot.market_cents = market
+    db.commit()
+    return result
+
+
+@router.get("/investments/history")
+def investments_history(db=Depends(get_db)):
+    points = db.scalars(select(models.PortfolioSnapshot).order_by(
+        models.PortfolioSnapshot.date)).all()
+    return {"points": [
+        {"date": point.date.isoformat(), "account_id": point.account_id,
+         "symbol": point.symbol,
+         "quantity_milli": point.quantity_milli,
+         "price_cents": point.price_cents,
+         "market_cents": point.market_cents}
+        for point in points
+    ]}
 
 
 @router.post("/transfers/link")

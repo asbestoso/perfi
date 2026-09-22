@@ -2,12 +2,12 @@
 from ..models import Account, Category, CategoryRule
 from ..models import (Holding, ImportAccountMapping, ImportBatch,
                       InvestmentAllocation, InvestmentClassification)
-from ..models import StagingRow, Transaction
+from ..models import PortfolioSnapshot, StagingRow, Transaction
 
 # Children before parents (SQLite does not enforce FKs here, but keep it safe).
 WIPED = (StagingRow, Transaction, CategoryRule, ImportAccountMapping,
          ImportBatch, InvestmentAllocation, InvestmentClassification,
-         Holding, Account, Category)
+         Holding, Account, Category, PortfolioSnapshot)
 
 
 def clear_database(db):

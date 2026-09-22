@@ -63,9 +63,19 @@ export default function Accounts() {
   const [msg, setMsg] = useState("");
   const [sortKey, setSortKey] = useState("name");
   const [sortDir, setSortDir] = useState<1 | -1>(1);
+  const [typeFilter, setTypeFilter] = useState<string[]>([]);
   const data = useGet(`/api/accounts?limit=500&tick=${tick}`);
   const items = data?.items || [];
-  const total = items.reduce((s: number, a: any) => s + Number(a.balance_cents || 0), 0);
+  const presentTypes = [...new Set(items.map((a: any) => String(a.type || "other")))].sort();
+  function toggleType(type: string) {
+    setTypeFilter((current) => current.includes(type)
+      ? current.filter((t) => t !== type)
+      : [...current, type]);
+  }
+  const filtered = typeFilter.length === 0
+    ? items
+    : items.filter((a: any) => typeFilter.includes(String(a.type || "other")));
+  const total = filtered.reduce((s: number, a: any) => s + Number(a.balance_cents || 0), 0);
   function toggleSort(key: string) {
     if (key === sortKey) {
       setSortDir((d) => (d === 1 ? -1 : 1));
@@ -74,7 +84,7 @@ export default function Accounts() {
       setSortDir(1);
     }
   }
-  const rows = [...items].sort((a: any, b: any) => {
+  const rows = [...filtered].sort((a: any, b: any) => {
     const av = sortKey === "balance_cents" ? Number(a.balance_cents || 0) : String(a[sortKey] ?? "");
     const bv = sortKey === "balance_cents" ? Number(b.balance_cents || 0) : String(b[sortKey] ?? "");
     if (typeof av === "number" || typeof bv === "number") return (Number(av) - Number(bv)) * sortDir;
@@ -108,10 +118,25 @@ export default function Accounts() {
       <Card title="Add account">
         <AddAccount onDone={() => setTick((t) => t + 1)} />
       </Card>
-      <Card title={`All accounts (${items.length}) · total ${dollars(total)}`}>
+      <Card title={`All accounts (${filtered.length}) · total ${dollars(total)}`}
+        action={typeFilter.length > 0 ? (
+          <button onClick={() => setTypeFilter([])} className="text-sm text-slate-500 hover:text-pine-700 hover:underline">
+            Clear type filter ({typeFilter.length})
+          </button>
+        ) : undefined}>
         <Error data={data} />
-        {items.length === 0 ? (
-          <Empty>No accounts yet — add one above or import a CSV.</Empty>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {presentTypes.map((type) => (
+            <button key={type} onClick={() => toggleType(type)}
+              className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${typeFilter.includes(type)
+                ? "border-pine-700 bg-pine-700 text-white"
+                : "border-slate-300 bg-white text-slate-600 hover:border-pine-700 hover:text-pine-700"}`}>
+              {type}
+            </button>
+          ))}
+        </div>
+        {filtered.length === 0 ? (
+          <Empty>{items.length === 0 ? "No accounts yet — add one above or import a CSV." : "No accounts match the current filters."}</Empty>
         ) : (
           <table className={tblCls}>
             <thead>

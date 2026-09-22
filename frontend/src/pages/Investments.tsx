@@ -1,6 +1,6 @@
 import React, { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../main";
-import { Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { Area, AreaChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, thousands, today, useGet, useSortable } from "./_shared";
 
 function shares(milli: any) {
@@ -116,6 +116,66 @@ const categoryColors = ["#166534", "#2563eb", "#b45309", "#7c3aed", "#0891b2", "
 const targetAllocations: Record<string, number> = {
   US: 55, Intl: 30, Alts: 1, Bonds: 14, Cash: 0,
 };
+
+function PortfolioHistory({ tick, accounts, positions }: any) {
+  const [historyAccount, setHistoryAccount] = useState("");
+  const [historyCategory, setHistoryCategory] = useState("");
+  const history = useGet(`/api/investments/history?tick=${tick}`);
+  const raw = history?.points || [];
+  const symbolCategory = Object.fromEntries(
+    (positions || []).map((p: any) => [p.symbol.toUpperCase(), p.category || "Uncategorized"]));
+  const byDate: Record<string, number> = {};
+  raw.forEach((point: any) => {
+    if (historyAccount && String(point.account_id) !== historyAccount) return;
+    if (historyCategory && (symbolCategory[String(point.symbol).toUpperCase()] || "Uncategorized") !== historyCategory) return;
+    byDate[point.date] = (byDate[point.date] || 0) + Number(point.market_cents || 0);
+  });
+  const points = Object.entries(byDate)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([date, market_cents]) => ({ date, value: market_cents / 100 }));
+  return (
+    <Card title="Portfolio over time"
+      hint={points.length < 2 ? "One data point is stored per day as prices refresh." : undefined}
+      action={
+        <div className="flex flex-wrap gap-2">
+          <select value={historyAccount} onChange={(e) => setHistoryAccount(e.target.value)}
+            className={inputCls}>
+            <option value="">All accounts</option>
+            {(accounts?.items || [])
+              .filter((a: any) => a.domain === "investing")
+              .map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+          <select value={historyCategory} onChange={(e) => setHistoryCategory(e.target.value)}
+            className={inputCls}>
+            <option value="">All categories</option>
+            {categories.map((category) => <option key={category}>{category}</option>)}
+            <option value="Mixed">Mixed</option>
+            <option value="Uncategorized">Uncategorized</option>
+          </select>
+        </div>
+      }>
+      {points.length === 0 ? (
+        <Empty>History starts building the next time prices refresh.</Empty>
+      ) : (
+        <div className="rounded-xl bg-slate-50/80 px-2 py-3">
+          <ResponsiveContainer width="100%" height={240}>
+            <AreaChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
+                minTickGap={32} tickFormatter={(date: string) => date.slice(5).replace("-", "/")} />
+              <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64}
+                tickFormatter={(value: number) => `$${(value / 1000).toFixed(1)}k`} />
+              <Tooltip formatter={(value: number) => dollars(Math.round(Number(value) * 100))}
+                labelFormatter={(date: string) => date} />
+              <Area type="monotone" dataKey="value" stroke="#166534" fill="#166534"
+                fillOpacity={0.12} strokeWidth={2} name="Market value" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </Card>
+  );
+}
 
 export default function Investments() {
   const [tick, setTick] = useState(0);
@@ -329,9 +389,6 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
-      <Card title="Add holding">
-        <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
-      </Card>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-1">
         <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
       </div>
@@ -555,6 +612,10 @@ export default function Investments() {
           </table>
         )}
         {message && <p className="mt-3 text-sm text-red-700">{message}</p>}
+      </Card>
+      <PortfolioHistory tick={tick} accounts={accounts} positions={positions} />
+      <Card title="Add holding">
+        <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
       </Card>
     </Page>
   );

@@ -82,6 +82,24 @@ class InvestmentAllocation(Base):
     percent_bps = Column(Integer, nullable=False)
 
 
+class PortfolioSnapshot(Base):
+    """One market-value data point per holding per day (upserted on refresh).
+
+    Per-holding grain (date x account x symbol) so history can be
+    filtered by account or investment category."""
+    __tablename__ = "portfolio_snapshots"
+    id = Column(Integer, primary_key=True, nullable=False)
+    date = Column(Date, nullable=False)
+    account_id = Column(ForeignKey("accounts.id"), nullable=True)
+    symbol = Column(String(20), nullable=False)
+    quantity_milli = Column(Integer, default=0, nullable=False)
+    price_cents = Column(Integer, default=0, nullable=False)
+    market_cents = Column(Integer, default=0, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("date", "account_id", "symbol"),
+    )
+
+
 class ImportBatch(Base):
     """One uploaded file: profile used, per-row outcomes in staging_rows.
 

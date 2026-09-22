@@ -182,3 +182,46 @@ def test_btc_uses_bitcoin_usd_yahoo_symbol(client, monkeypatch):
     from app.services.market_data import yahoo_symbol
     assert yahoo_symbol("BTC") == "BTC-USD"
     assert yahoo_symbol("AAPL") == "AAPL"
+
+
+def test_summary_records_one_snapshot_per_day(client, monkeypatch):
+    import datetime as dt
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 10000)
+    client.post("/api/investments", json={"symbol": "VTI", "quantity_milli": 10000})
+    client.post("/api/investments", json={"symbol": "BND", "quantity_milli": 5000})
+
+    client.get("/api/investments/summary")
+    client.get("/api/investments/summary")
+    history = client.get("/api/investments/history").json()["points"]
+    assert len(history) == 2
+    by_sym = {point["symbol"]: point for point in history}
+    assert by_sym["VTI"]["date"] == dt.date.today().isoformat()
+    assert by_sym["VTI"]["market_cents"] == 100000
+    assert by_sym["BND"]["market_cents"] == 50000
+
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    client.get("/api/investments/summary")
+    history = client.get("/api/investments/history").json()["points"]
+    assert len(history) == 2
+    by_sym = {point["symbol"]: point for point in history}
+    assert by_sym["VTI"]["market_cents"] == 200000
+    assert by_sym["BND"]["market_cents"] == 100000
+
+
+def test_quote_cache_serves_repeat_summaries(client, monkeypatch):
+    from app.services import market_data
+    market_data.clear_quote_cache()
+    calls = []
+
+    def quote(symbol):
+        calls.append(symbol)
+        return 25000
+
+    monkeypatch.setattr("app.services.market_data._fetch_price", quote)
+    client.post("/api/investments", json={"symbol": "VTI", "quantity_milli": 1000})
+
+    assert client.get("/api/investments/summary").status_code == 200
+    assert calls == ["VTI"]
+    assert client.get("/api/investments/summary").status_code == 200
+    assert calls == ["VTI"]
+    market_data.clear_quote_cache()
