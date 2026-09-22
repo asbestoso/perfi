@@ -125,9 +125,34 @@ def update_account(id, payload: schemas.AccountUpdate, db=Depends(get_db)):
     if payload.domain is not None:
         _check_domain(payload.domain)
         account.domain = payload.domain
+    if payload.balance_cents is not None:
+        if account.type != "manual":
+            raise HTTPException(status_code=422,
+                                detail="only manual accounts have an editable balance")
+        account.balance_cents = int(payload.balance_cents)
     db.commit()
     db.refresh(account)
     return account
+
+
+@router.delete("/accounts/{id}")
+def delete_account(id, db=Depends(get_db)):
+    account = _get_or_404(db, models.Account, _as_int(id, "id"))
+    db.query(models.Transaction).filter_by(account_id=account.id).delete(
+        synchronize_session=False)
+    db.query(models.Holding).filter_by(account_id=account.id).delete(
+        synchronize_session=False)
+    db.query(models.PortfolioSnapshot).filter_by(account_id=account.id).delete(
+        synchronize_session=False)
+    db.query(models.StagingRow).filter_by(account_id=account.id).update(
+        {"account_id": None}, synchronize_session=False)
+    db.query(models.ImportAccountMapping).filter_by(account_id=account.id).delete(
+        synchronize_session=False)
+    db.query(models.ImportBatch).filter_by(account_id=account.id).update(
+        {"account_id": None}, synchronize_session=False)
+    db.delete(account)
+    db.commit()
+    return {"ok": True, "deleted": id}
 
 
 @router.get("/categories", response_model=schemas.Page[schemas.CategoryRead])

@@ -106,3 +106,26 @@ def test_server_error_is_json_detail_shape(client):
         app.dependency_overrides.clear()
     assert r.status_code == 500
     assert r.json() == {"detail": "Internal Server Error"}
+
+
+def test_manual_account_balance_editable_only_for_manual(client):
+    account = client.post("/api/accounts", json={"name": "Cash box", "type": "manual"}).json()
+    response = client.patch(f"/api/accounts/{account['id']}", json={"balance_cents": 12345})
+    assert response.status_code == 200
+    assert response.json()["balance_cents"] == 12345
+    other = client.post("/api/accounts", json={"name": "Checking"}).json()
+    assert client.patch(f"/api/accounts/{other['id']}",
+                        json={"balance_cents": 999}).status_code == 422
+
+
+def test_delete_account_cleans_up_children(client):
+    account = client.post("/api/accounts", json={"name": "Old", "type": "manual",
+                                                 "balance_cents": 500}).json()
+    client.post("/api/import/csv?profile=empower",
+                files={"file": ("stmt.csv", b"date,merchant,amount\n2026-01-01,Shop,-5.00\n",
+                                "text/csv")})
+    response = client.delete(f"/api/accounts/{account['id']}")
+    assert response.status_code == 200
+    remaining = client.get("/api/accounts").json()["items"]
+    assert all(item["id"] != account["id"] for item in remaining)
+    assert client.delete(f"/api/accounts/{account['id']}").status_code == 404

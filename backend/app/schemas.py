@@ -28,6 +28,7 @@ class AccountUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None
     domain: Optional[str] = None
+    balance_cents: Optional[int] = None
 
 
 class CategoryCreate(BaseModel):

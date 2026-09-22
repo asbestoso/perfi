@@ -4,7 +4,7 @@ import { Amt, btnCls, Card, dollars, Empty, Error, inputCls, Page, tblCls, useGe
 
 const TYPES = [
   "checking", "savings", "credit", "brokerage", "401k",
-  "Roth", "Traditional IRA", "HSA", "529", "other"
+  "Roth", "Traditional IRA", "HSA", "529", "manual", "other"
 ];
 const DOMAINS = ["spending", "investing", "mixed"];
 
@@ -101,13 +101,29 @@ export default function Accounts() {
   function isEditing(a: any, field: string) {
     return editing != null && editing.id === a.id && editing.field === field;
   }
+  async function deleteAccount(a: any) {
+    if (!window.confirm(
+      `Delete account "${a.name}"? Its transactions, holdings, and history are removed too.`
+    )) return;
+    try {
+      await api(`/api/accounts/${a.id}`, { method: "DELETE" });
+      setEditing(null); setMsg("");
+      setTick((t) => t + 1);
+    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
+  }
   async function saveField(a: any, field: string, value: string) {
-    const clean = field === "name" ? value.trim() : value;
-    if (field === "name" && !clean) { setMsg("Name is required."); return; }
+    const clean = field === "name" ? value.trim() : field === "balance" ? value : value;
+    if (field === "name" && !clean) {
+      deleteAccount(a);
+      return;
+    }
+    const body = field === "balance"
+      ? { balance_cents: Math.round(Number(clean || 0) * 100) }
+      : { [field]: clean };
     try {
       await api(`/api/accounts/${a.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: clean }),
+        body: JSON.stringify(body),
       });
       setEditing(null); setMsg("");
       setTick((t) => t + 1);
@@ -154,8 +170,11 @@ export default function Accounts() {
                     {isEditing(a, "name") ? (
                       <form onSubmit={(e) => { e.preventDefault(); saveField(a, "name", draft); }} className="flex max-w-md gap-1">
                         <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+                          onBlur={() => setEditing(null)}
+                          placeholder="Empty name deletes the account"
                           className={`${inputCls} w-full py-1`} />
-                        <button className={btnCls}>Save</button>
+                        <button className={btnCls}
+                          onMouseDown={(e) => e.preventDefault()}>Save</button>
                       </form>
                     ) : (
                       <button onClick={() => startEdit(a, "name")}
@@ -166,6 +185,7 @@ export default function Accounts() {
                     {isEditing(a, "type") ? (
                       <select autoFocus value={draft}
                         onChange={(e) => saveField(a, "type", e.target.value)}
+                        onBlur={() => setEditing(null)}
                         className={`${inputCls} w-full py-1`}>
                         {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
@@ -178,6 +198,7 @@ export default function Accounts() {
                     {isEditing(a, "domain") ? (
                       <select autoFocus value={draft}
                         onChange={(e) => saveField(a, "domain", e.target.value)}
+                        onBlur={() => setEditing(null)}
                         className={`${inputCls} w-full py-1`}>
                         {DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
                       </select>
@@ -186,7 +207,30 @@ export default function Accounts() {
                         className="text-left hover:text-pine-700 hover:underline">{a.domain}</button>
                     )}
                   </td>
-                  <td className="text-right"><Amt cents={a.balance_cents} /></td>
+                  <td className="text-right">
+                    {a.type === "manual" ? (
+                      isEditing(a, "balance") ? (
+                        <form onSubmit={(e) => { e.preventDefault(); saveField(a, "balance", draft); }} className="flex justify-end gap-1">
+                          <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
+                            onBlur={() => setEditing(null)}
+                            inputMode="decimal" className={`${inputCls} w-28 py-1 text-right`} />
+                          <button className={btnCls}
+                            onMouseDown={(e) => e.preventDefault()}>Save</button>
+                        </form>
+                      ) : (
+                        <button onClick={() => {
+                          setEditing({ id: a.id, field: "balance" });
+                          setDraft(String(Number(a.balance_cents || 0) / 100));
+                          setMsg("");
+                        }}
+                          className="tabular-nums hover:text-pine-700 hover:underline">
+                          <Amt cents={a.balance_cents} />
+                        </button>
+                      )
+                    ) : (
+                      <Amt cents={a.balance_cents} />
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
