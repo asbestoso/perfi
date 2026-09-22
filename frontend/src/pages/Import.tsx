@@ -699,6 +699,40 @@ function UnknownQueue({ batchId, tick, onChange }: any) {
   );
 }
 
+function BatchChanges({ batchId, tick }: any) {
+  const data = useGet(`/api/import/batches/${batchId}/changes?tick=${tick}`);
+  if (!data || data.error || !data.changes) return null;
+  if (data.changes.length === 0) return (
+    <p className="text-sm text-slate-500">No holdings changed in this import.</p>
+  );
+  const qty = (m: number) => (m / 1000).toLocaleString();
+  return (
+    <table className={tblCls}>
+      <thead><tr><th>Account</th><th>Holding</th>
+        <th className="text-right">Before</th><th className="text-right">Imported</th>
+        <th className="text-right">Now</th>
+      </tr></thead>
+      <tbody>
+        {data.changes.map((c: any) => (
+          <tr key={`${c.account_id}-${c.symbol}`}>
+            <td>{c.account_name}</td>
+            <td>{c.symbol}{c.added && " (new)"}</td>
+            <td className="text-right tabular-nums">{qty(c.previous_quantity_milli)}</td>
+            <td className="text-right tabular-nums">{qty(c.quantity_milli)}</td>
+            <td className="text-right tabular-nums">
+              {c.current_quantity_milli == null
+                ? "removed"
+                : c.current_quantity_milli === c.quantity_milli
+                  ? "—"
+                  : `${qty(c.current_quantity_milli)} (edited since)`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function BatchSummary({ batchId, tick, onChange }: any) {
   const data = useGet(`/api/import/batches/${batchId}?tick=${tick}`);
   if (!data || data.error) return null;
@@ -728,6 +762,28 @@ function BatchSummary({ batchId, tick, onChange }: any) {
   );
 }
 
+function BatchDetail({ batchId, tick, onChange }: any) {
+  const data = useGet(`/api/import/batches/${batchId}?tick=${tick}`);
+  if (!data || data.error) return null;
+  if (data.profile === "Holding") {
+    return (
+      <Card title={`Batch #${batchId} changes`}>
+        <BatchSummary batchId={batchId} tick={tick} onChange={onChange} />
+        <BatchChanges batchId={batchId} tick={tick} />
+      </Card>
+    );
+  }
+  return (
+    <>
+      <UnknownQueue batchId={batchId} tick={tick} onChange={onChange} />
+      <Card title={`Batch #${batchId} rows`}>
+        <BatchSummary batchId={batchId} tick={tick} onChange={onChange} />
+        <RowQueue batchId={batchId} tick={tick} onChange={onChange} />
+      </Card>
+    </>
+  );
+}
+
 export default function Import() {
   const [batchId, setBatchId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
@@ -748,13 +804,7 @@ export default function Import() {
         <BatchList active={batchId} onSelect={setBatchId} tick={tick} />
       </Card>
       {batchId != null && (
-        <>
-          <UnknownQueue batchId={batchId} tick={tick} onChange={bump} />
-          <Card title={`Batch #${batchId} rows`}>
-            <BatchSummary batchId={batchId} tick={tick} onChange={bump} />
-            <RowQueue batchId={batchId} tick={tick} onChange={bump} />
-          </Card>
-        </>
+        <BatchDetail batchId={batchId} tick={tick} onChange={bump} />
       )}
     </Page>
   );

@@ -47,7 +47,7 @@ def test_holding_profile_requires_and_persists_account_mapping(db):
     holding = db.query(models.Holding).one()
     assert holding.account_id == 1 and holding.quantity_milli == 12500
     again = import_csv(db, None, raw, profile="Holding")
-    assert again["updated"] == 1
+    assert again["updated"] == 0
     assert db.query(models.Holding).count() == 1
 
 
@@ -424,3 +424,28 @@ def test_holding_scan_ignores_saved_mapping_for_deleted_account(store, client):
                                 "text/csv")},
     ).json()
     assert body["external_accounts"][0]["saved_account_id"] is None
+
+
+def test_holding_batch_changes_lists_only_diffs(store, client):
+    client.post("/api/accounts", json={"name": "Brokerage Alpha", "type": "brokerage"})
+    first = client.post(
+        "/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+        files={"file": ("holdings.csv",
+                        b"Account,Holding,Quantity\nBrokerage Alpha,VTI,12.5\nBrokerage Alpha,VOO,3\n",
+                        "text/csv")},
+    ).json()
+    changes = client.get(f"/api/import/batches/{first['batch_id']}/changes").json()["changes"]
+    assert [(c["symbol"], c["added"]) for c in changes] == [("VTI", True), ("VOO", True)]
+
+    second = client.post(
+        "/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+        files={"file": ("holdings.csv",
+                        b"Account,Holding,Quantity\nBrokerage Alpha,VTI,12.5\nBrokerage Alpha,VOO,4\n",
+                        "text/csv")},
+    ).json()
+    assert second["updated"] == 1
+    changes = client.get(f"/api/import/batches/{second['batch_id']}/changes").json()["changes"]
+    assert len(changes) == 1
+    assert changes[0]["symbol"] == "VOO"
+    assert changes[0]["previous_quantity_milli"] == 3000
+    assert changes[0]["quantity_milli"] == 4000

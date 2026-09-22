@@ -503,6 +503,29 @@ def review_batch(id, db=Depends(get_db)):
             "safe": len(safe), "needs_review": len(suspects)}
 
 
+@router.get("/import/batches/{id}/changes")
+def batch_changes(id, db=Depends(get_db)):
+    import json
+    batch = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
+    stored = json.loads(batch.mapping or "{}").get("_holding_changes", [])
+    names = {row[0]: row[1] for row in db.query(models.Account.id, models.Account.name).all()}
+    current = {(h.account_id, h.symbol.upper()): h.quantity_milli
+               for h in db.query(models.Holding).all()}
+    changes = []
+    for item in stored:
+        key = (item["account_id"], item["symbol"])
+        changes.append({
+            "account_id": item["account_id"],
+            "account_name": names.get(item["account_id"], "Unknown account"),
+            "symbol": item["symbol"],
+            "added": item.get("added", False),
+            "previous_quantity_milli": item["previous_quantity_milli"],
+            "quantity_milli": item["quantity_milli"],
+            "current_quantity_milli": current.get(key),
+        })
+    return {"batch_id": batch.id, "changes": changes}
+
+
 @router.post("/import/batches/{id}/merge-safe")
 def merge_safe(id, db=Depends(get_db)):
     merged, held = reconcile.merge_safe(db, _as_int(id, "id"))

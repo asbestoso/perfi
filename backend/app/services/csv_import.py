@@ -263,6 +263,7 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
     changed = 0
     seen = set()
     previous = []
+    changes = []
     saved_mappings = {}
     for row in active_rows:
         label = (row.get(mapping.get("account", "Account")) or "").strip()
@@ -286,15 +287,27 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
             holding = Holding(account_id=aid, symbol=symbol, quantity_milli=quantity,
                               import_batch_id=batch.id)
             db.add(holding)
-        else:
+            changes.append({
+                "account_id": aid, "symbol": symbol,
+                "previous_quantity_milli": 0, "quantity_milli": quantity,
+                "added": True,
+            })
+            changed += 1
+        elif holding.quantity_milli != quantity:
             previous.append({
                 "account_id": aid, "symbol": symbol, "quantity_milli": holding.quantity_milli,
                 "name": holding.name, "price_cents": holding.price_cents,
                 "import_batch_id": holding.import_batch_id,
             })
+            changes.append({
+                "account_id": aid, "symbol": symbol,
+                "previous_quantity_milli": holding.quantity_milli,
+                "quantity_milli": quantity,
+                "added": False,
+            })
             holding.quantity_milli = quantity
             holding.import_batch_id = batch.id
-        changed += 1
+            changed += 1
         if label in saved_mappings:
             continue
         saved_mappings[label] = True
@@ -305,7 +318,8 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
                                         external_label=label, account_id=aid))
         else:
             existing.account_id = aid
-    batch.mapping = json.dumps({**mapping, "_holding_previous": previous})
+    batch.mapping = json.dumps({**mapping, "_holding_previous": previous,
+                                "_holding_changes": changes})
     batch.staged = len(active_rows)
     batch.skipped = len(rows) - len(active_rows)
     db.commit()
