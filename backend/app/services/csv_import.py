@@ -118,7 +118,7 @@ def stage_rows(db, account_id, profile_name, filename, parsed,
     investing_accounts = set()
     for p, raw, kind, detail in classified:
         name = (p.get("account", "") or "").strip() or "Default"
-        if file_kind == "brokerage" or kind in ("brokerage_cash", "trade", "unknown"):
+        if file_kind == "brokerage" or kind in ("brokerage_cash", "unknown"):
             investing_accounts.add(name)
     staged, skipped, accounts, new_categories = 0, 0, set(), []
     by_kind = {}
@@ -147,19 +147,10 @@ def stage_rows(db, account_id, profile_name, filename, parsed,
             tname, tsource = resolve_category(db, p["merchant"], rules)
         txn_kind = detail.get("transaction_kind") or (
             "income" if p["amount_cents"] > 0 else "expense")
-        trade_json = "{}"
-        if kind == "trade":
-            import json as _json
-            trade_json = _json.dumps({
-                "symbol": p.get("symbol") or "",
-                "quantity_milli": p.get("quantity_milli") or 0,
-                "price_cents": p.get("price_cents") or 0,
-                "side": detail.get("side", "buy"),
-            })
         # Exact dupes are held as duplicate rows for review, never silently
         # dropped: the user discards them or force-merges (keep both).
-        # Trades and unknown rows never merge into transactions; they wait
-        # for trade approval or review on the Import page.
+        # Unknown rows never merge into transactions; they wait for review
+        # on the Import page.
         db.add(StagingRow(batch_id=batch.id, account_id=acct.id,
                           date=p["date"], merchant=p["merchant"],
                           amount_cents=p["amount_cents"],
@@ -167,9 +158,7 @@ def stage_rows(db, account_id, profile_name, filename, parsed,
                           category_source=tsource, note=p["note"] or None,
                           status="duplicate" if dupe else "pending",
                           row_kind=kind, transaction_kind=txn_kind,
-                          row_detail=detail.get("reason", "") or (
-                              f"suggested {detail['side']}" if kind == "trade" else ""),
-                          trade_json=trade_json,
+                          row_detail=detail.get("reason", ""),
                           raw=json.dumps(raw, default=str)))
         staged += 1
         by_kind[kind] = by_kind.get(kind, 0) + 1

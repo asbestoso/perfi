@@ -6,8 +6,6 @@ import Dashboard from "./pages/Dashboard";
 import Transactions from "./pages/Transactions";
 import Accounts from "./pages/Accounts";
 import Investments from "./pages/Investments";
-import InvestmentAnalysis from "./pages/InvestmentAnalysis";
-import TradeAnalysis from "./pages/TradeAnalysis";
 import Import from "./pages/Import";
 import Settings from "./pages/Settings";
 
@@ -18,15 +16,13 @@ export async function api(path: string, opts?: RequestInit) {
 }
 
 const LINKS = ["", "transactions", "accounts",
-               "investments", "portfolio-analysis", "trade-analysis", "import", "settings"];
+               "investments", "import", "settings"];
 
 const LABELS: Record<string, string> = {
   "": "dashboard",
   transactions: "spending",
   accounts: "accounts",
   investments: "portfolio",
-  "portfolio-analysis": "allocation",
-  "trade-analysis": "trades",
   import: "import",
   settings: "settings",
 };
@@ -34,7 +30,7 @@ const LABELS: Record<string, string> = {
 const SECTIONS: { title: string; links: string[] }[] = [
   { title: "Overview", links: [""] },
   { title: "Spending", links: ["transactions"] },
-  { title: "Investing", links: ["investments", "portfolio-analysis", "trade-analysis"] },
+  { title: "Investing", links: ["investments"] },
   { title: "Manage", links: ["accounts", "import", "settings"] },
 ];
 
@@ -97,9 +93,9 @@ function Shell() {
           <Route path="/transactions" element={<Transactions />} />
           <Route path="/accounts" element={<Accounts />} />
           <Route path="/investments" element={<Investments />} />
-          <Route path="/portfolio-analysis" element={<InvestmentAnalysis />} />
-          <Route path="/investment-analysis" element={<Navigate to="/portfolio-analysis" replace />} />
-          <Route path="/trade-analysis" element={<TradeAnalysis />} />
+          <Route path="/portfolio-analysis" element={<Navigate to="/investments" replace />} />
+          <Route path="/investment-analysis" element={<Navigate to="/investments" replace />} />
+          <Route path="/trade-analysis" element={<Navigate to="/investments" replace />} />
           <Route path="/import" element={<Import />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

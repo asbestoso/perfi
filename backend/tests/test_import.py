@@ -279,7 +279,6 @@ def test_import_batch_can_be_rolled_back(store, client):
     assert rollback.status_code == 200
     assert rollback.json() == {
         "ok": True, "batch_id": batch_id, "transactions": 1,
-        "investment_orders": 0,
     }
     assert client.get("/api/transactions").json()["total"] == 0
     assert client.get(f"/api/import/batches/{batch_id}").json()["status"] == "rolled_back"

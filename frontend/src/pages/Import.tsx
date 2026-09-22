@@ -600,7 +600,6 @@ function RowQueue({ batchId, tick, onChange }: any) {
           <option value="">All kinds</option>
           <option value="spend">Spend</option>
           <option value="brokerage_cash">Brokerage cash</option>
-          <option value="trade">Trades</option>
           <option value="unknown">Needs review</option>
         </select>
         <button onClick={checkReview} className={btnSecCls}>
@@ -666,103 +665,6 @@ function RowQueue({ batchId, tick, onChange }: any) {
         </table>
       )}
     </div>
-  );
-}
-
-function FundingSuggestions({ tick, onChange }: any) {
-  const [msg, setMsg] = useState("");
-  const data = useGet(`/api/funded-buys/suggestions?tick=${tick}`);
-  const items = Array.isArray(data) ? data : [];
-  async function link(orderId: number, txnId: number) {
-    try {
-      await api(`/api/investment-orders/${orderId}/link-funding?transaction_id=${txnId}`,
-        { method: "POST" });
-      setMsg("Funded buy linked.");
-      onChange();
-    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
-  }
-  if (items.length === 0) return null;
-  return (
-    <Card title={`Funded buys to link (${items.length})`}>
-      <p className="mb-3 text-sm text-slate-500">
-        These buys have possible funding deposits. Linking keeps the deposit out of spending.
-      </p>
-      {msg && <p className="mb-2 text-sm text-slate-600">{msg}</p>}
-      <ul className="divide-y divide-slate-100">
-        {items.map((s: any) => (
-          <li key={s.order_id} className="py-2 text-sm">
-            <span className="font-medium">{s.symbol} · {dollars(s.principal_cents)} · {s.executed_at}</span>
-            <div className="mt-1 space-y-1">
-              {(s.candidates || []).map((c: any) => (
-                <div key={c.id} className="flex items-center justify-between gap-2 text-slate-600">
-                  <span>{c.date} · {c.merchant} · {dollars(c.amount_cents)}</span>
-                  <button onClick={() => link(s.order_id, c.id)} className={btnSmCls}>Link</button>
-                </div>
-              ))}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
-}
-
-function TradeCard({ row, batchId, onChange }: any) {
-  const t = row.trade_json || {};
-  const [side, setSide] = useState(t.side || "buy");
-  const [msg, setMsg] = useState("");
-  const shares = (Number(t.quantity_milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
-  async function approve() {
-    try {
-      const r = await api(
-        `/api/import/batches/${batchId}/approve-trade?staging_id=${row.id}&side=${side}`,
-        { method: "POST" });
-      setMsg(r.created
-        ? `Order #${r.order_id} created${r.funded_transaction_id ? `, funded by txn #${r.funded_transaction_id}` : ""}.`
-        : `Already recorded as order #${r.order_id} — nothing duplicated.`);
-      onChange();
-    } catch (e: any) { setMsg(`Failed: ${e.message}`); }
-  }
-  async function discard() {
-    await api(`/api/import/batches/${batchId}/resolve?staging_id=${row.id}&action=discard`,
-      { method: "POST" });
-    onChange();
-  }
-  return (
-    <li className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-      <div>
-        <span className="font-medium">{t.symbol || row.merchant}</span>
-        <span className="text-slate-500"> · {shares} shares @ {dollars(t.price_cents)} · {row.date}</span>
-        {row.row_detail && <span className="text-slate-400"> · {row.row_detail}</span>}
-      </div>
-      <div className="flex items-center gap-1">
-        <select value={side} onChange={(e) => setSide(e.target.value)} className={inputCls}>
-          <option value="buy">Buy</option>
-          <option value="sell">Sell</option>
-        </select>
-        <button onClick={approve} className={btnSmCls}>Approve</button>
-        <button onClick={discard} className={btnSmCls}>Discard</button>
-      </div>
-      {msg && <span className="basis-full text-sm text-slate-600">{msg}</span>}
-    </li>
-  );
-}
-
-function TradeQueue({ batchId, tick, onChange }: any) {
-  const data = useGet(`/api/import/batches/${batchId}/rows?kind=trade&status=pending&tick=${tick}`);
-  // Oldest first: approving buys before later sells keeps holding checks passing.
-  const rows = [...(data?.items || [])].sort((a: any, b: any) =>
-    String(a.date).localeCompare(String(b.date)) || a.id - b.id);
-  if (rows.length === 0) return null;
-  return (
-    <Card title={`Trades to approve (${rows.length})`}>
-      <p className="mb-2 text-sm text-slate-500">
-        Approving creates the order and moves the holding — never a spending transaction. Re-approvals are no-ops.
-      </p>
-      <ul className="divide-y divide-slate-100">
-        {rows.map((r: any) => <TradeCard key={r.id} row={r} batchId={batchId} onChange={onChange} />)}
-      </ul>
-    </Card>
   );
 }
 
@@ -834,7 +736,6 @@ export default function Import() {
   return (
     <Page title="Import">
       <TransferSuggestions tick={tick} onChange={bump} />
-      <FundingSuggestions tick={tick} onChange={bump} />
       <Card title="Upload">
         <p className="mb-2 text-sm text-slate-500">
           Bank statements and brokerage activity exports land here. New layouts ask you to
@@ -848,7 +749,6 @@ export default function Import() {
       </Card>
       {batchId != null && (
         <>
-          <TradeQueue batchId={batchId} tick={tick} onChange={bump} />
           <UnknownQueue batchId={batchId} tick={tick} onChange={bump} />
           <Card title={`Batch #${batchId} rows`}>
             <BatchSummary batchId={batchId} tick={tick} onChange={bump} />

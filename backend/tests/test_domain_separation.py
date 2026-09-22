@@ -91,37 +91,6 @@ def test_report_domain_param(store, client):
     assert client.get(base + "&domain=nope").status_code == 422
 
 
-def test_order_cash_link_excludes_leg_from_spend(store, client):
-    g = store["cats"]["Groceries"]
-    inv = client.post("/api/accounts", json={
-        "name": "Brokerage", "type": "brokerage", "domain": "investing",
-    }).json()["id"]
-    cash_leg = make_txn(client, store["acct"], g, -100000,
-                        "Schwab transfer", "2026-08-04")
-    order = client.post("/api/investment-orders", json={
-        "account_id": inv, "symbol": "VTI", "side": "buy",
-        "quantity_milli": 1000, "price_cents": 90000, "fees_cents": 0,
-        "executed_at": "2026-08-04", "linked_transaction_id": cash_leg["id"],
-    })
-    assert order.status_code == 200
-    assert order.json()["linked_transaction_id"] == cash_leg["id"]
-    leg = client.get(f"/api/transactions/{cash_leg['id']}").json()
-    assert leg["transfer_id"] == f"order:{order.json()['id']}"
-
-    again = client.post("/api/investment-orders", json={
-        "account_id": inv, "symbol": "VTI", "side": "buy",
-        "quantity_milli": 1000, "price_cents": 90000, "fees_cents": 0,
-        "executed_at": "2026-08-05", "linked_transaction_id": cash_leg["id"],
-    })
-    assert again.status_code == 422
-    missing = client.post("/api/investment-orders", json={
-        "account_id": inv, "symbol": "VTI", "side": "buy",
-        "quantity_milli": 1000, "price_cents": 90000, "fees_cents": 0,
-        "executed_at": "2026-08-05", "linked_transaction_id": 9999,
-    })
-    assert missing.status_code == 404
-
-
 def test_account_type_can_be_updated(store, client):
     aid = store["acct"]
     r = client.patch(f"/api/accounts/{aid}", json={"type": "brokerage"})

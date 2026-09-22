@@ -1,47 +1,3 @@
-def test_orders_track_purchases_without_tax_lots(store, client, monkeypatch):
-    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 12000)
-    buy = client.post("/api/investment-orders", json={
-        "account_id": store["acct"], "symbol": "VTI", "side": "buy",
-        "quantity_milli": 10000, "price_cents": 10000,
-        "executed_at": "2026-01-01"})
-    assert buy.status_code == 200
-    assert buy.json()["proceeds_cents"] is None
-    # no lot resolution: orders carry no cost or gain fields
-    assert "cost_basis_cents" not in buy.json()
-    assert "gain_cents" not in buy.json()
-    sell = client.post("/api/investment-orders", json={
-        "account_id": store["acct"], "symbol": "VTI", "side": "sell",
-        "quantity_milli": 4000, "price_cents": 12000,
-        "executed_at": "2026-02-01"})
-    assert sell.status_code == 200
-    assert sell.json()["proceeds_cents"] == 48000
-    holdings = client.get("/api/investments").json()["holdings"]
-    assert sum(h["quantity_milli"] for h in holdings) == 6000
-    # selling more than the holding rejects (holdings check, not lots)
-    assert client.post("/api/investment-orders", json={
-        "account_id": store["acct"], "symbol": "VTI", "side": "sell",
-        "quantity_milli": 7000, "price_cents": 12000,
-        "executed_at": "2026-02-01"}).status_code == 422
-    response = client.get("/api/investment-orders/analysis")
-    assert response.status_code == 200
-    sell_row = next(row for row in response.json()["items"] if row["side"] == "sell")
-    assert sell_row["cost_cents"] == 40000
-    assert sell_row["gain_cents"] == 8000
-    assert sell_row["percent"] == 20
-    buy_row = next(row for row in response.json()["items"] if row["side"] == "buy")
-    assert buy_row["annualized_percent"] is not None
-
-
-def test_trade_analysis_hides_recent_annualized_return(store, client):
-    response = client.post("/api/investment-orders", json={
-        "account_id": store["acct"], "symbol": "VTI", "side": "buy",
-        "quantity_milli": 1000, "price_cents": 10000,
-        "executed_at": "2026-09-01"})
-    assert response.status_code == 200
-    analysis = client.get("/api/investment-orders/analysis").json()
-    assert analysis["items"][0]["annualized_percent"] is None
-
-
 def test_summary_math(client, monkeypatch):
     monkeypatch.setattr(
         "app.api.routes.api.get_live_price",
@@ -80,6 +36,8 @@ def test_summary_aggregates_same_symbol_across_accounts(store, client, monkeypat
     assert position["market_cents"] == 375000
     assert [(a["name"], a["quantity_milli"]) for a in position["accounts"]] == [
         ("Checking", 10000), ("Card", 5000)]
+    assert position["accounts"][0]["price_cents"] == 25000
+    assert position["accounts"][0]["market_cents"] == 250000
     assert summary["market_cents"] == 375000
 
 
@@ -129,6 +87,31 @@ def test_holding_can_be_linked_to_account(store, client, monkeypatch):
         "symbol": "MSFT", "account_id": 9999}).status_code == 404
 
 
+def test_holding_quantity_patch_and_zero_removes(store, client, monkeypatch):
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
+    account_id = store["acct"]
+    created = client.post("/api/investments", json={
+        "symbol": "VTI", "account_id": account_id, "quantity_milli": 1000})
+    assert created.status_code == 200
+    holding_id = created.json()["id"]
+
+    patched = client.patch(f"/api/investments/{holding_id}",
+                           json={"quantity_milli": 2500})
+    assert patched.status_code == 200
+    assert patched.json()["deleted"] is False
+    assert client.get("/api/investments").json()["holdings"][0]["quantity_milli"] == 2500
+
+    assert client.patch(f"/api/investments/{holding_id}",
+                        json={"quantity_milli": -1}).status_code == 422
+    assert client.patch("/api/investments/9999",
+                        json={"quantity_milli": 5}).status_code == 404
+
+    removed = client.patch(f"/api/investments/{holding_id}", json={"quantity_milli": 0})
+    assert removed.status_code == 200
+    assert removed.json()["deleted"] is True
+    assert client.get("/api/investments").json()["holdings"] == []
+
+
 def test_adding_existing_account_holding_overwrites_quantity(store, client, monkeypatch):
     monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
     account_id = store["acct"]
@@ -156,6 +139,8 @@ def test_symbol_classification_applies_to_all_accounts(store, client, monkeypatc
     assert response.status_code == 200
     assert response.json()["category"] == "Intl"
     assert {h["category"] for h in client.get("/api/investments").json()["holdings"]} == {"Intl"}
+    position = client.get("/api/investments/summary").json()["positions"][0]
+    assert position["category"] == "Intl"
     assert client.patch("/api/investments/classification/VXUS",
                         json={"category": "Cash"}).status_code == 200
     assert client.patch("/api/investments/classification/VXUS",
@@ -165,10 +150,13 @@ def test_symbol_classification_applies_to_all_accounts(store, client, monkeypatc
 
 
 def test_symbol_mixed_allocations_total_one_hundred(client):
+    client.post("/api/investments", json={"symbol": "VTI", "quantity_milli": 1000})
     response = client.put("/api/investments/allocation/VTI", json={
         "allocations": {"US": 70, "Intl": 30, "Bonds": ""}})
     assert response.status_code == 200
     assert response.json()["allocations"] == {"US": 70, "Intl": 30}
+    position = client.get("/api/investments/summary").json()["positions"][0]
+    assert position["allocations"] == {"US": 70, "Intl": 30}
     assert client.put("/api/investments/allocation/VTI", json={
         "allocations": {"US": 70, "Intl": 20}}).status_code == 422
     assert client.put("/api/investments/allocation/VTI", json={

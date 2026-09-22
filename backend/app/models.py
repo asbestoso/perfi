@@ -82,23 +82,6 @@ class InvestmentAllocation(Base):
     percent_bps = Column(Integer, nullable=False)
 
 
-class InvestmentOrder(Base):
-    __tablename__ = "investment_orders"
-    id = Column(Integer, primary_key=True, nullable=False)
-    account_id = Column(ForeignKey("accounts.id"), nullable=False)
-    linked_transaction_id = Column(ForeignKey("transactions.id"), nullable=True)
-    fingerprint = Column(String(32), nullable=True, index=True)
-    import_batch_id = Column(ForeignKey("import_batches.id"), nullable=True)
-    symbol = Column(String(20), nullable=False)
-    side = Column(String(4), nullable=False)
-    quantity_milli = Column(Integer, nullable=False)
-    price_cents = Column(Integer, nullable=False)
-    fees_cents = Column(Integer, default=0, nullable=False)
-    executed_at = Column(Date, nullable=False)
-    proceeds_cents = Column(Integer, nullable=True)
-    account = relationship("Account")
-
-
 class ImportBatch(Base):
     """One uploaded file: profile used, per-row outcomes in staging_rows.
 
@@ -136,9 +119,9 @@ class ImportAccountMapping(Base):
 class StagingRow(Base):
     """One parsed row awaiting user merge. Status: pending, merged, discarded, duplicate.
 
-    row_kind is spend | brokerage_cash | trade | unknown: where the row
-    belongs. Trades never merge into transactions; they approve into
-    investment orders. transaction_kind presets the merged transaction's
+    row_kind is spend | brokerage_cash | unknown: where the row belongs.
+    Unknown rows never merge into transactions; they wait for review on
+    the Import page. transaction_kind presets the merged transaction's
     kind; row_detail holds a human reason for unknown rows.
     """
     __tablename__ = "staging_rows"
@@ -147,7 +130,6 @@ class StagingRow(Base):
     row_kind = Column(String(20), default="spend", nullable=False)
     transaction_kind = Column(String(32), default="expense", nullable=False)
     row_detail = Column(Text, default="", nullable=False)
-    trade_json = Column(Text, default="{}", nullable=False)
     account_id = Column(ForeignKey("accounts.id"), nullable=True)
     date = Column(Date, nullable=False)
     merchant = Column(String(200), default="", nullable=False)

@@ -129,18 +129,6 @@ class StagingRowRead(BaseModel):
     row_kind: str = "spend"
     transaction_kind: str = "expense"
     row_detail: str = ""
-    trade_json: dict = {}
-
-    @field_validator("trade_json", mode="before")
-    @classmethod
-    def _parse_trade_json(cls, v):
-        import json
-        if isinstance(v, str):
-            try:
-                return json.loads(v) if v else {}
-            except ValueError:
-                return {}
-        return v or {}
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -155,21 +143,4 @@ class HoldingCreate(BaseModel):
 
 class HoldingRead(HoldingCreate):
     id: int
-    model_config = ConfigDict(from_attributes=True)
-
-
-class OrderCreate(BaseModel):
-    account_id: int
-    symbol: str
-    side: str
-    quantity_milli: int
-    price_cents: int
-    fees_cents: int = 0
-    executed_at: dt.date
-    linked_transaction_id: Optional[int] = None
-
-
-class OrderRead(OrderCreate):
-    id: int
-    proceeds_cents: Optional[int] = None
     model_config = ConfigDict(from_attributes=True)

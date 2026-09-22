@@ -2,7 +2,8 @@
 from sqlalchemy import select
 
 from ..logging_setup import get as get_log
-from ..models import Account, Holding, Transaction
+from ..models import (Account, Holding, InvestmentAllocation,
+                      InvestmentClassification, Transaction)
 
 log = get_log("analytics")
 
@@ -17,13 +18,22 @@ def portfolio_value(db):
 def portfolio_summary(db):
     """Holdings-only positions: quantity and market value per symbol.
 
-    Trades live separately in investment_orders; the summary never
-    carries cost or gain (no tax lots).
+    The summary never carries cost or gain (no tax lots).
     """
     holdings = {}
+    classifications = {
+        item.symbol.upper(): item.category
+        for item in db.scalars(select(InvestmentClassification)).all()
+    }
+    allocations = {}
+    for item in db.scalars(select(InvestmentAllocation)).all():
+        allocations.setdefault(item.symbol.upper(), {})[item.category] = (
+            item.percent_bps / 100)
     for holding in db.scalars(select(Holding)).all():
         sym = holding.symbol.upper()
         position = holdings.setdefault(sym, {"name": holding.name, "quantity_milli": 0, "market_cents": 0,
+                                             "category": classifications.get(sym),
+                                             "allocations": allocations.get(sym, {}),
                                              "accounts": {}})
         if not position["name"] and holding.name:
             position["name"] = holding.name
@@ -33,18 +43,27 @@ def portfolio_summary(db):
         account_name = holding.account.name if holding.account is not None else "Unassigned"
         account = position["accounts"].setdefault(
             account_id, {"account_id": account_id, "name": account_name,
-                         "quantity_milli": 0})
+                         "holding_id": holding.id, "quantity_milli": 0,
+                         "market_cents": 0})
         account["quantity_milli"] += holding.quantity_milli
+        account["market_cents"] += (holding.quantity_milli * holding.price_cents) // 1000
     positions, market_total = [], 0
     for sym in sorted(holdings):
         holding = holdings[sym]
         qty, market = holding["quantity_milli"], holding["market_cents"]
         price = (market * 1000) // qty if qty else 0
         market_total += market
+        accounts = []
+        for entry in holding["accounts"].values():
+            aqty, amarket = entry["quantity_milli"], entry["market_cents"]
+            entry["price_cents"] = (amarket * 1000) // aqty if aqty else 0
+            accounts.append(entry)
         positions.append({"symbol": sym, "name": holding["name"],
                           "quantity_milli": qty,
                           "price_cents": price, "market_cents": market,
-                          "accounts": list(holding["accounts"].values())})
+                          "category": holding["category"],
+                          "allocations": holding["allocations"],
+                          "accounts": accounts})
     return {"positions": positions, "market_cents": market_total}
 
 

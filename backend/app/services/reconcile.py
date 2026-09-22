@@ -79,9 +79,6 @@ def classify_batch(db, batch_id):
 
     for s in pending:
         aid, fp = meta[s.id]
-        if s.row_kind == "trade":
-            held(s, "pending", ["trade: approve it as an order on the Import page"])
-            continue
         if s.row_kind == "unknown":
             held(s, "pending", [s.row_detail or "unknown activity: review before posting"])
             continue
@@ -154,8 +151,6 @@ def merge_row(db, staging_id):
         raise HTTPException(status_code=404, detail="Not found")
     if s.status not in ("pending", "duplicate"):
         raise HTTPException(status_code=409, detail=f"already {s.status}")
-    if s.row_kind == "trade":
-        raise HTTPException(status_code=409, detail="trade rows approve as orders, not transactions")
     if s.row_kind == "unknown":
         raise HTTPException(status_code=409, detail="unknown rows need review before posting")
     if s.status == "pending" and transaction_exists(

@@ -1,4 +1,4 @@
-"""Mixed-file import: header scan, mapping, kinds, trades, funded buys."""
+"""Mixed-file import: header scan, mapping, kinds, review holds."""
 from conftest import ROBINHOOD_ACTIVITY_CSV as ROBINHOOD_CSV
 
 
@@ -158,7 +158,7 @@ def test_mixed_file_routes_each_row(store, client):
     assert scan["mapping"]["type"] == "Trans Code"
 
 
-def test_trade_rows_never_merge_as_transactions(store, client):
+def test_unsupported_code_rows_never_merge_as_transactions(store, client):
     body = ("Activity Date,Description,Amount,Trans Code,Instrument,Quantity,Price\n"
             "01/05/2026,Buy VTI,-100.00,BUY,VTI,1,100.00\n")
     r = _upload_mapped(client, body, {
@@ -167,165 +167,17 @@ def test_trade_rows_never_merge_as_transactions(store, client):
         "price": "Price", "account": None, "category": None, "note": None,
     }, file_kind="brokerage")
     assert r.status_code == 200, r.text
-    assert r.json()["by_kind"] == {"trade": 1}
+    assert r.json()["by_kind"] == {"unknown": 1}
     bid = r.json()["batch_id"]
-    rows = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()
+    rows = client.get(f"/api/import/batches/{bid}/rows?kind=unknown").json()
     assert rows["total"] == 1
-    assert rows["items"][0]["row_detail"] == "suggested buy"
+    assert rows["items"][0]["row_detail"] == "unsupported activity code BUY"
     assert client.post(f"/api/import/batches/{bid}/merge-all").json() == {
         "ok": True, "merged": 0}
     sid = rows["items"][0]["id"]
     assert client.post(
         f"/api/import/batches/{bid}/resolve?staging_id={sid}&action=merge").status_code == 409
     assert client.get("/api/transactions?limit=1").json()["total"] == 0
-
-
-TRADE_CSV = ("Activity Date,Description,Amount,Trans Code,Instrument,Quantity,Price\n"
-             "01/05/2026,Buy 10 VTI,-1000.00,BUY,VTI,10,100.00\n")
-
-TRADE_MAPPING = {
-    "date": "Activity Date", "merchant": "Description", "amount": "Amount",
-    "type": "Trans Code", "symbol": "Instrument", "quantity": "Quantity",
-    "price": "Price", "account": None, "category": None, "note": None,
-}
-
-
-def test_approve_trade_creates_order_once(store, client):
-    r = _upload_mapped(client, TRADE_CSV, TRADE_MAPPING, name="trades.csv")
-    assert r.status_code == 200, r.text
-    bid = r.json()["batch_id"]
-    rows = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()
-    assert rows["total"] == 1
-    trade = rows["items"][0]["trade_json"]
-    assert trade == {"symbol": "VTI", "quantity_milli": 10000,
-                     "price_cents": 10000, "side": "buy"}
-    sid = rows["items"][0]["id"]
-
-    first = client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}").json()
-    assert first["ok"] and first["created"] is True
-    assert first["funded_transaction_id"] is None
-    assert client.get("/api/transactions?limit=1").json()["total"] == 0
-    orders = client.get("/api/investment-orders").json()
-    assert orders["total"] == 1
-    assert orders["items"][0]["price_cents"] == 10000
-    holdings = client.get("/api/investments").json()["holdings"]
-    assert len(holdings) == 1 and holdings[0]["quantity_milli"] == 10000
-
-    again = client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}")
-    assert again.status_code == 409  # row already merged
-
-    # Re-uploading the same file must not double-create the order.
-    r2 = _upload_mapped(client, TRADE_CSV, TRADE_MAPPING, name="trades.csv")
-    assert r2.status_code == 200, r2.text
-    bid2 = r2.json()["batch_id"]
-    dupe = client.get(f"/api/import/batches/{bid2}/rows").json()["items"][0]
-    assert dupe["status"] == "duplicate" and dupe["row_kind"] == "trade"
-    second = client.post(
-        f"/api/import/batches/{bid2}/approve-trade?staging_id={dupe['id']}").json()
-    assert second["order_id"] == first["order_id"] and second["created"] is False
-    orders = client.get("/api/investment-orders").json()
-    assert orders["total"] == 1
-
-
-def test_rollback_trade_batch_reverses_order_and_holding(store, client):
-    r = _upload_mapped(client, TRADE_CSV, TRADE_MAPPING, name="rollback-trades.csv")
-    bid = r.json()["batch_id"]
-    sid = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()["items"][0]["id"]
-    approved = client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}").json()
-    assert approved["created"] is True
-    assert client.get("/api/investment-orders").json()["total"] == 1
-    assert client.post(f"/api/import/batches/{bid}/rollback").json() == {
-        "ok": True, "batch_id": bid, "transactions": 0,
-        "investment_orders": 1,
-    }
-    assert client.get("/api/investment-orders").json()["total"] == 0
-    assert client.get("/api/investments").json()["holdings"] == []
-
-
-def test_approve_trade_guards(store, client):
-    r = _upload_mapped(client, TRADE_CSV, TRADE_MAPPING, name="guards.csv")
-    bid, sid = r.json()["batch_id"], client.get(
-        f"/api/import/batches/{r.json()['batch_id']}/rows?kind=trade").json()["items"][0]["id"]
-    assert client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}&side=hold").status_code == 422
-    spend_bid = client.post(
-        "/api/import/csv?profile=generic",
-        files={"file": ("s.csv", b"date,merchant,amount\n2026-01-05,A,-100\n",
-                        "text/csv")}).json()["batch_id"]
-    spend_sid = client.get(f"/api/import/batches/{spend_bid}/rows").json()["items"][0]["id"]
-    assert client.post(
-        f"/api/import/batches/{spend_bid}/approve-trade?staging_id={spend_sid}").status_code == 422
-    assert client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id=9999").status_code == 404
-
-
-def _deposit(client, acct, cents, date, merchant="Schwab deposit"):
-    r = client.post("/api/transactions", json={
-        "account_id": acct, "amount_cents": cents,
-        "merchant": merchant, "date": date})
-    assert r.status_code == 200
-    return r.json()
-
-
-def test_funded_buy_auto_links_exact_match(store, client):
-    inv = client.post("/api/accounts", json={
-        "name": "Schwab", "type": "brokerage", "domain": "investing",
-    }).json()["id"]
-    funding = _deposit(client, inv, 100000, "2026-01-03")
-    body = ("Activity Date,Description,Amount,Trans Code,Instrument,Quantity,Price,Account\n"
-            "01/05/2026,Buy 10 VTI,-1000.00,BUY,VTI,10,100.00,Schwab\n")
-    r = _upload_mapped(client, body, dict(TRADE_MAPPING, account="Account"),
-                       name="funded.csv")
-    assert r.status_code == 200, r.text
-    bid = r.json()["batch_id"]
-    sid = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()["items"][0]["id"]
-    out = client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}").json()
-    assert out["funded_transaction_id"] == funding["id"]
-    leg = client.get(f"/api/transactions/{funding['id']}").json()
-    assert leg["transfer_id"] == f"order:{out['order_id']}:funding"
-    assert client.get("/api/funded-buys/suggestions").json() == []
-
-    assert client.delete(
-        f"/api/investment-orders/{out['order_id']}/link").json() == {
-        "ok": True, "cleared": 1}
-    assert client.get(f"/api/transactions/{funding['id']}").json()["transfer_id"] is None
-
-
-def test_funded_buy_ambiguous_stays_suggestion(store, client):
-    inv = client.post("/api/accounts", json={
-        "name": "Schwab", "type": "brokerage", "domain": "investing",
-    }).json()["id"]
-    first = _deposit(client, inv, 100000, "2026-01-02", "Deposit A")
-    second = _deposit(client, inv, 100000, "2026-01-03", "Deposit B")
-    order = client.post("/api/investment-orders", json={
-        "account_id": inv, "symbol": "VTI", "side": "buy",
-        "quantity_milli": 10000, "price_cents": 10000,
-        "executed_at": "2026-01-05"}).json()
-    assert client.post(
-        f"/api/investment-orders/{order['id']}/link-funding").status_code == 409
-    sugg = client.get("/api/funded-buys/suggestions").json()
-    assert len(sugg) == 1 and sugg[0]["order_id"] == order["id"]
-    assert {c["id"] for c in sugg[0]["candidates"]} == {first["id"], second["id"]}
-    linked = client.post(
-        f"/api/investment-orders/{order['id']}/link-funding?transaction_id={first['id']}").json()
-    assert linked == {"ok": True, "transaction_id": first["id"]}
-    assert client.get("/api/funded-buys/suggestions").json() == []
-
-
-def test_approve_sell_without_shares_fails_cleanly(store, client):
-    body = ("Activity Date,Description,Amount,Trans Code,Instrument,Quantity,Price\n"
-            "01/05/2026,Sell 10 VTI,1000.00,SELL,VTI,10,100.00\n")
-    r = _upload_mapped(client, body, TRADE_MAPPING, name="sell.csv")
-    assert r.status_code == 200, r.text
-    bid = r.json()["batch_id"]
-    sid = client.get(f"/api/import/batches/{bid}/rows?kind=trade").json()["items"][0]["id"]
-    assert client.post(
-        f"/api/import/batches/{bid}/approve-trade?staging_id={sid}").status_code == 422
-    assert client.get("/api/investment-orders").json()["total"] == 0
 
 
 def test_unknown_code_held_for_review(store, client):

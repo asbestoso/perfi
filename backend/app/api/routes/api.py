@@ -1,6 +1,5 @@
 """Thin CRUD + domain routes under /api."""
 import datetime as dt
-import calendar
 import math
 import re
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -469,7 +468,7 @@ def batch_rows(id, paging=Depends(pagination), status=None, kind=None, db=Depend
         stmt = stmt.where(models.StagingRow.status == status)
         total_stmt = total_stmt.where(models.StagingRow.status == status)
     if kind is not None:
-        if kind not in ("spend", "brokerage_cash", "trade", "unknown"):
+        if kind not in ("spend", "brokerage_cash", "unknown"):
             raise HTTPException(status_code=422, detail="Invalid row kind")
         stmt = stmt.where(models.StagingRow.row_kind == kind)
         total_stmt = total_stmt.where(models.StagingRow.row_kind == kind)
@@ -507,59 +506,6 @@ def review_batch(id, db=Depends(get_db)):
 def merge_safe(id, db=Depends(get_db)):
     merged, held = reconcile.merge_safe(db, _as_int(id, "id"))
     return {"ok": True, "merged": merged, "held": held}
-
-
-@router.post("/import/batches/{id}/approve-trade")
-def approve_trade(id, staging_id: int, side=None, db=Depends(get_db)):
-    """Approve a staged trade row into an investment order (idempotent).
-
-    Optional side override (buy/sell) corrects a misread suggestion.
-    Approving twice, or approving a re-uploaded duplicate, returns the
-    same order without moving holdings twice.
-    """
-    import json
-    from ...services.fingerprint import order_fingerprint
-    from ...services.funding import auto_link_funding
-    from ...services.orders import create_order, find_order
-    b = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
-    s = db.get(models.StagingRow, _as_int(staging_id, "staging_id"))
-    if s is None or s.batch_id != b.id:
-        raise HTTPException(status_code=404, detail="Not found")
-    if s.status not in ("pending", "duplicate"):
-        raise HTTPException(status_code=409, detail=f"already {s.status}")
-    if s.row_kind != "trade":
-        raise HTTPException(status_code=422, detail="only trade rows approve as orders")
-    try:
-        trade = json.loads(s.trade_json or "{}")
-    except ValueError:
-        trade = {}
-    trade_side = side or trade.get("side", "buy")
-    if trade_side not in ("buy", "sell"):
-        raise HTTPException(status_code=422, detail="Side must be buy or sell")
-    if not trade.get("symbol") or not trade.get("quantity_milli") \
-            or not trade.get("price_cents"):
-        raise HTTPException(status_code=422, detail="trade needs symbol, quantity, and price")
-    aid = s.account_id if s.account_id is not None else b.account_id
-    if aid is None:
-        raise HTTPException(status_code=422, detail="trade needs an account")
-    fp = order_fingerprint(aid, trade["symbol"], trade_side,
-                           trade["quantity_milli"], trade["price_cents"], 0,
-                           s.date)
-    existed = find_order(db, fp) is not None
-    order = create_order(db, aid, trade["symbol"], trade_side,
-                         trade["quantity_milli"], trade["price_cents"], 0,
-                         s.date)
-    funded_id = None
-    if not existed:
-        leg = auto_link_funding(db, order)
-        funded_id = leg.id if leg is not None else None
-        order.import_batch_id = b.id
-        db.commit()
-    if s.status == "pending":
-        s.status = "merged"
-        db.commit()
-    return {"ok": True, "order_id": order.id, "created": not existed,
-            "funded_transaction_id": funded_id}
 
 
 @router.post("/admin/clear")
@@ -665,6 +611,28 @@ def create_holding(payload: schemas.HoldingCreate, db=Depends(get_db)):
     return h
 
 
+@router.patch("/investments/{id}")
+def update_holding(id, payload: dict, db=Depends(get_db)):
+    holding = _get_or_404(db, models.Holding, _as_int(id, "id"))
+    if "quantity_milli" not in payload:
+        raise HTTPException(status_code=422, detail="quantity_milli is required")
+    try:
+        quantity = int(payload["quantity_milli"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="quantity_milli must be an integer")
+    if quantity < 0:
+        raise HTTPException(status_code=422, detail="quantity_milli cannot be negative")
+    if quantity == 0:
+        db.delete(holding)
+        db.commit()
+        return {"ok": True, "deleted": True}
+    holding.quantity_milli = quantity
+    db.commit()
+    db.refresh(holding)
+    return {"ok": True, "deleted": False,
+            **schemas.HoldingRead.model_validate(holding).model_dump()}
+
+
 @router.patch("/investments/classification/{symbol}")
 def update_investment_classification(symbol: str, payload: dict, db=Depends(get_db)):
     category = payload.get("category")
@@ -749,116 +717,6 @@ def investments_summary(db=Depends(get_db)):
             holding.name = names[symbol]
     db.commit()
     return analytics.portfolio_summary(db)
-
-
-@router.get("/investment-orders", response_model=schemas.Page[schemas.OrderRead])
-def list_investment_orders(paging=Depends(pagination), db=Depends(get_db)):
-    limit, offset = paging
-    total = db.scalar(select(func.count()).select_from(models.InvestmentOrder)) or 0
-    items = db.scalars(select(models.InvestmentOrder).order_by(
-        models.InvestmentOrder.executed_at.desc(),
-        models.InvestmentOrder.id.desc()).limit(limit).offset(offset)).all()
-    return {"items": items, "total": total}
-
-
-@router.get("/investment-orders/analysis")
-def investment_orders_analysis(db=Depends(get_db)):
-    """Order-level trade P&L from raw orders only.
-
-    Buys show purchase cost (qty x price + fees) against the latest
-    quote. Sells show proceeds against the average buy price for that
-    account + symbol, computed here on the fly. This is display-only
-    trade analysis, not tax-lot resolution: nothing is stored.
-    """
-    orders = db.scalars(select(models.InvestmentOrder).order_by(
-        models.InvestmentOrder.executed_at.desc(),
-        models.InvestmentOrder.id.desc())).all()
-    bought = {}
-    for order in orders:
-        if order.side != "buy":
-            continue
-        key = (order.account_id, order.symbol.upper())
-        qty, cost = bought.get(key, (0, 0))
-        bought[key] = (qty + order.quantity_milli,
-                       cost + (order.quantity_milli * order.price_cents) // 1000
-                       + (order.fees_cents or 0))
-    prices = {}
-    items = []
-    today = dt.date.today()
-    target_month = today.month - 4
-    target_year = today.year
-    if target_month <= 0:
-        target_month += 12
-        target_year -= 1
-    four_months_ago = dt.date(
-        target_year, target_month,
-        min(today.day, calendar.monthrange(target_year, target_month)[1]),
-    )
-    for order in orders:
-        symbol = order.symbol.upper()
-        if symbol not in prices:
-            try:
-                prices[symbol] = get_live_price(symbol)
-            except QuoteUnavailableError:
-                prices[symbol] = order.price_cents
-        if order.side == "buy":
-            cost = ((order.quantity_milli * order.price_cents) // 1000
-                    + (order.fees_cents or 0))
-            market_value = (order.quantity_milli * prices[symbol]) // 1000
-            gain = market_value - cost
-        else:
-            market_value = order.proceeds_cents or 0
-            qty, total = bought.get((order.account_id, symbol), (0, 0))
-            cost = (order.quantity_milli * total) // qty if qty else 0
-            gain = market_value - cost
-        percent = gain / cost * 100 if cost else 0
-        days = max((today - order.executed_at).days, 1)
-        annualized = ((1 + gain / cost) ** (365 / days) - 1) * 100 \
-            if order.executed_at <= four_months_ago and cost \
-            and 1 + gain / cost > 0 else None
-        items.append({
-            "id": order.id, "account_name": order.account.name,
-            "symbol": symbol, "side": order.side,
-            "quantity_milli": order.quantity_milli,
-            "executed_at": order.executed_at,
-            "market_value_cents": market_value,
-            "cost_cents": cost,
-            "gain_cents": gain,
-            "percent": percent,
-            "annualized_percent": annualized,
-        })
-    return {"items": items, "total": len(items)}
-
-
-@router.post("/investment-orders", response_model=schemas.OrderRead)
-def create_investment_order(payload: schemas.OrderCreate, db=Depends(get_db)):
-    from ...services.orders import create_order
-    return create_order(db, payload.account_id, payload.symbol, payload.side,
-                        payload.quantity_milli, payload.price_cents,
-                        payload.fees_cents, payload.executed_at,
-                        payload.linked_transaction_id)
-
-
-@router.get("/funded-buys/suggestions")
-def funded_buy_suggestions(db=Depends(get_db)):
-    from ...services.funding import suggestions
-    return suggestions(db)
-
-
-@router.post("/investment-orders/{id}/link-funding")
-def link_order_funding(id, transaction_id=None, db=Depends(get_db)):
-    from ...services.funding import link_funding
-    tid = None
-    if transaction_id is not None:
-        tid = _as_int(transaction_id, "transaction_id")
-    txn = link_funding(db, _as_int(id, "id"), tid)
-    return {"ok": True, "transaction_id": txn.id}
-
-
-@router.delete("/investment-orders/{id}/link")
-def unlink_order(id, db=Depends(get_db)):
-    from ...services.funding import unlink_order as do_unlink
-    return do_unlink(db, _as_int(id, "id"))
 
 
 @router.post("/transfers/link")

@@ -9,6 +9,34 @@ export function useGet(path: string) {
   return data;
 }
 
+/* Shared sortable-table state: click a header to sort, click again to flip.
+   `getters` maps each sortable key to a value extractor; numeric values
+   sort numerically, everything else compares case-insensitively. */
+export function useSortable(defaultKey: string, getters: Record<string, (row: any) => any>) {
+  const [sortKey, setSortKey] = useState(defaultKey);
+  const [ascending, setAscending] = useState(true);
+  function sortBy(key: string) {
+    if (key === sortKey) setAscending((v) => !v);
+    else { setSortKey(key); setAscending(true); }
+  }
+  function arrow(key: string) {
+    return sortKey === key ? (ascending ? " ↑" : " ↓") : "";
+  }
+  function sorted(rows: any[]) {
+    const get = getters[sortKey] || ((row: any) => row[sortKey]);
+    return [...rows].sort((a, b) => {
+      const left = get(a);
+      const right = get(b);
+      const result = typeof left === "number" && typeof right === "number"
+        ? left - right
+        : String(left ?? "").toLowerCase() < String(right ?? "").toLowerCase() ? -1
+        : String(left ?? "").toLowerCase() > String(right ?? "").toLowerCase() ? 1 : 0;
+      return ascending ? result : -result;
+    });
+  }
+  return { sortKey, ascending, sortBy, arrow, sorted };
+}
+
 export function Page({ title, sub, children }: any) {
   return (
     <main className="mx-auto max-w-6xl space-y-5 px-4 py-8 md:px-8">
@@ -88,6 +116,10 @@ export function dollars(cents: any) {
   return (Number(cents || 0) / 100).toLocaleString(undefined, {
     style: "currency", currency: "USD",
   });
+}
+
+export function thousands(cents: any) {
+  return `$${(Number(cents || 0) / 100000).toFixed(1)}k`;
 }
 
 export function today() {
