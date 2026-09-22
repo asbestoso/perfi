@@ -507,7 +507,9 @@ def review_batch(id, db=Depends(get_db)):
 def batch_changes(id, db=Depends(get_db)):
     import json
     batch = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
-    stored = json.loads(batch.mapping or "{}").get("_holding_changes", [])
+    mapping = json.loads(batch.mapping or "{}")
+    stored = mapping.get("_holding_changes", [])
+    imported_symbols = mapping.get("_holding_symbols", {})
     names = {row[0]: row[1] for row in db.query(models.Account.id, models.Account.name).all()}
     current = {(h.account_id, h.symbol.upper()): h.quantity_milli
                for h in db.query(models.Holding).all()}
@@ -523,7 +525,70 @@ def batch_changes(id, db=Depends(get_db)):
             "quantity_milli": item["quantity_milli"],
             "current_quantity_milli": current.get(key),
         })
-    return {"batch_id": batch.id, "changes": changes}
+    missing = []
+    for aid_raw, symbols in imported_symbols.items():
+        aid = int(aid_raw)
+        wanted = set(symbols)
+        for (held_aid, symbol), quantity in current.items():
+            if held_aid != aid or symbol in wanted:
+                continue
+            missing.append({
+                "account_id": aid,
+                "account_name": names.get(aid, "Unknown account"),
+                "symbol": symbol,
+                "current_quantity_milli": quantity,
+            })
+    missing.sort(key=lambda item: (item["account_name"], item["symbol"]))
+    return {"batch_id": batch.id, "changes": changes, "missing": missing}
+
+
+@router.post("/import/batches/{id}/remove-missing")
+def batch_remove_missing(id, payload: dict, db=Depends(get_db)):
+    import json
+    batch = _get_or_404(db, models.ImportBatch, _as_int(id, "id"))
+    if batch.profile != "Holding":
+        raise HTTPException(status_code=422, detail="only holding batches support remove-missing")
+    mapping = json.loads(batch.mapping or "{}")
+    imported_symbols = mapping.get("_holding_symbols", {})
+    wanted = set()
+    for entry in payload.get("holdings", []) or []:
+        wanted.add((int(entry[0]), str(entry[1]).upper()))
+    previous = mapping.get("_holding_previous", [])
+    known = {(item["account_id"], item["symbol"]) for item in previous}
+    changes = mapping.get("_holding_changes", [])
+    holding_keys = {
+        (item["account_id"], item["symbol"])
+        for item in changes
+        if item.get("previous_quantity_milli", 0) > 0
+    }
+    removed = []
+    for aid, symbol in sorted(wanted):
+        if symbol in set(imported_symbols.get(str(aid), [])):
+            continue
+        holding = db.query(models.Holding).filter_by(account_id=aid, symbol=symbol).one_or_none()
+        if holding is None:
+            continue
+        if (aid, symbol) not in known:
+            previous.append({
+                "account_id": aid, "symbol": symbol, "quantity_milli": holding.quantity_milli,
+                "name": holding.name, "price_cents": holding.price_cents,
+                "import_batch_id": holding.import_batch_id,
+            })
+            known.add((aid, symbol))
+        if (aid, symbol) not in holding_keys:
+            changes.append({
+                "account_id": aid, "symbol": symbol,
+                "previous_quantity_milli": holding.quantity_milli,
+                "quantity_milli": 0,
+                "added": False, "removed": True,
+            })
+            holding_keys.add((aid, symbol))
+        db.delete(holding)
+        removed.append({"account_id": aid, "symbol": symbol})
+    batch.mapping = json.dumps({**mapping, "_holding_previous": previous,
+                                "_holding_changes": changes})
+    db.commit()
+    return {"ok": True, "batch_id": batch.id, "removed": removed}
 
 
 @router.post("/import/batches/{id}/merge-safe")

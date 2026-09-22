@@ -449,3 +449,35 @@ def test_holding_batch_changes_lists_only_diffs(store, client):
     assert changes[0]["symbol"] == "VOO"
     assert changes[0]["previous_quantity_milli"] == 3000
     assert changes[0]["quantity_milli"] == 4000
+
+
+def test_holding_batch_missing_and_remove(store, client):
+    client.post("/api/accounts", json={"name": "Brokerage Alpha", "type": "brokerage"})
+    first = client.post(
+        "/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+        files={"file": ("holdings.csv",
+                        b"Account,Holding,Quantity\nBrokerage Alpha,VTI,10\nBrokerage Alpha,VOO,5\n",
+                        "text/csv")},
+    ).json()
+    second = client.post(
+        "/api/import/csv?profile=Holding&mapping=%7B%22accounts%22%3A%7B%22Brokerage%20Alpha%22%3A1%7D%7D",
+        files={"file": ("holdings.csv",
+                        b"Account,Holding,Quantity\nBrokerage Alpha,VTI,10\n",
+                        "text/csv")},
+    ).json()
+    changes = client.get(f"/api/import/batches/{second['batch_id']}/changes").json()
+    assert changes["changes"] == []
+    assert [(m["symbol"], m["current_quantity_milli"]) for m in changes["missing"]] == [("VOO", 5000)]
+
+    remove = client.post(
+        f"/api/import/batches/{second['batch_id']}/remove-missing",
+        json={"holdings": [[1, "VOO"]]},
+    ).json()
+    assert remove["removed"] == [{"account_id": 1, "symbol": "VOO"}]
+    changes = client.get(f"/api/import/batches/{second['batch_id']}/changes").json()
+    assert changes["missing"] == []
+    assert [(c["symbol"], c["quantity_milli"]) for c in changes["changes"]] == [("VOO", 0)]
+
+    client.post(f"/api/import/batches/{second['batch_id']}/rollback")
+    holdings = client.get("/api/investments").json()["holdings"]
+    assert {h["symbol"]: h["quantity_milli"] for h in holdings} == {"VTI": 10000, "VOO": 5000}

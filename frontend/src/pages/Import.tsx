@@ -699,14 +699,45 @@ function UnknownQueue({ batchId, tick, onChange }: any) {
   );
 }
 
-function BatchChanges({ batchId, tick }: any) {
+function BatchChanges({ batchId, tick, onChange }: any) {
   const data = useGet(`/api/import/batches/${batchId}/changes?tick=${tick}`);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [removing, setRemoving] = useState(false);
   if (!data || data.error || !data.changes) return null;
-  if (data.changes.length === 0) return (
+  const missing = data.missing || [];
+  async function removeMissing() {
+    const holdings = [...selected].map((key) => key.split("|"));
+    if (holdings.length === 0) return;
+    if (!window.confirm(
+      `Remove ${holdings.length} holding${holdings.length === 1 ? "" : "s"}? ` +
+      `You can undo this with "Roll back import".`
+    )) return;
+    setRemoving(true);
+    try {
+      await api(`/api/import/batches/${batchId}/remove-missing`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ holdings }),
+      });
+      setSelected(new Set());
+      onChange();
+    } catch (e: any) {
+      window.alert(`Remove failed: ${e.message}`);
+    } finally {
+      setRemoving(false);
+    }
+  }
+  if (data.changes.length === 0 && missing.length === 0) return (
     <p className="text-sm text-slate-500">No holdings changed in this import.</p>
   );
   const qty = (m: number) => (m / 1000).toLocaleString();
+  const toggle = (key: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   return (
+    <div className="space-y-4">
     <table className={tblCls}>
       <thead><tr><th>Account</th><th>Holding</th>
         <th className="text-right">Before</th><th className="text-right">Imported</th>
@@ -716,7 +747,7 @@ function BatchChanges({ batchId, tick }: any) {
         {data.changes.map((c: any) => (
           <tr key={`${c.account_id}-${c.symbol}`}>
             <td>{c.account_name}</td>
-            <td>{c.symbol}{c.added && " (new)"}</td>
+            <td>{c.symbol}{c.added && " (new)"}{c.removed && " (removed)"}</td>
             <td className="text-right tabular-nums">{qty(c.previous_quantity_milli)}</td>
             <td className="text-right tabular-nums">{qty(c.quantity_milli)}</td>
             <td className="text-right tabular-nums">
@@ -730,6 +761,35 @@ function BatchChanges({ batchId, tick }: any) {
         ))}
       </tbody>
     </table>
+    {missing.length > 0 && (
+      <div>
+        <h4 className="mb-1 text-sm font-medium text-slate-700">
+          In Perfi but not in this file — sold?
+        </h4>
+        <p className="mb-2 text-sm text-slate-500">
+          These holdings exist for the imported accounts but weren't in the CSV.
+          Tick the ones you've sold and remove them; rollback restores them.
+        </p>
+        <div className="space-y-1">
+          {missing.map((m: any) => {
+            const key = `${m.account_id}|${m.symbol}`;
+            return (
+              <label key={key} className="flex items-center gap-2 text-sm text-slate-600">
+                <input type="checkbox" checked={selected.has(key)}
+                  onChange={() => toggle(key)} />
+                <span className="font-medium">{m.symbol}</span>
+                <span className="text-slate-500">· {m.account_name} · {qty(m.current_quantity_milli)}</span>
+              </label>
+            );
+          })}
+        </div>
+        <button onClick={removeMissing} disabled={selected.size === 0 || removing}
+          className={`${btnSmCls} mt-2`}>
+          {removing ? "Removing…" : `Remove selected (${selected.size})`}
+        </button>
+      </div>
+    )}
+    </div>
   );
 }
 
@@ -769,7 +829,7 @@ function BatchDetail({ batchId, tick, onChange }: any) {
     return (
       <Card title={`Batch #${batchId} changes`}>
         <BatchSummary batchId={batchId} tick={tick} onChange={onChange} />
-        <BatchChanges batchId={batchId} tick={tick} />
+        <BatchChanges batchId={batchId} tick={tick} onChange={onChange} />
       </Card>
     );
   }

@@ -264,6 +264,7 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
     seen = set()
     previous = []
     changes = []
+    imported = {}
     saved_mappings = {}
     for row in active_rows:
         label = (row.get(mapping.get("account", "Account")) or "").strip()
@@ -282,6 +283,7 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
         if key in seen:
             raise HTTPException(status_code=422, detail=f"duplicate holding row for {label} / {symbol}")
         seen.add(key)
+        imported.setdefault(aid, set()).add(symbol)
         holding = db.query(Holding).filter_by(account_id=aid, symbol=symbol).one_or_none()
         if holding is None:
             holding = Holding(account_id=aid, symbol=symbol, quantity_milli=quantity,
@@ -319,7 +321,9 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
         else:
             existing.account_id = aid
     batch.mapping = json.dumps({**mapping, "_holding_previous": previous,
-                                "_holding_changes": changes})
+                                "_holding_changes": changes,
+                                "_holding_symbols": {str(aid): sorted(syms) for aid, syms in
+                                                     sorted(imported.items())}})
     batch.staged = len(active_rows)
     batch.skipped = len(rows) - len(active_rows)
     db.commit()
