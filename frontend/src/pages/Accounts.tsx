@@ -103,7 +103,7 @@ export default function Accounts() {
   }
   async function deleteAccount(a: any) {
     if (!window.confirm(
-      `Delete account "${a.name}"? Its transactions, holdings, and history are removed too.`
+      `Delete account "${a.name}"? Its transactions and holdings are removed, but snapshot history is kept.`
     )) return;
     try {
       await api(`/api/accounts/${a.id}`, { method: "DELETE" });

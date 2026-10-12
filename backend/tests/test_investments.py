@@ -87,6 +87,50 @@ def test_holding_can_be_linked_to_account(store, client, monkeypatch):
         "symbol": "MSFT", "account_id": 9999}).status_code == 404
 
 
+def test_investment_contributions_are_recorded_and_listed(store, client):
+    account_id = client.post("/api/accounts", json={
+        "name": "Brokerage", "domain": "investing"}).json()["id"]
+    response = client.post("/api/investments/contributions", json={
+        "account_id": account_id, "amount_cents": 12500,
+        "date": "2026-09-01", "note": "September contribution"})
+    assert response.status_code == 200
+    assert response.json()["amount_cents"] == 12500
+
+    items = client.get("/api/investments/contributions").json()["items"]
+    assert items[0]["account_name"] == "Brokerage"
+    assert items[0]["date"] == "2026-09-01"
+    assert items[0]["note"] == "September contribution"
+
+
+def test_investment_contributions_validate_account_and_amount(store, client):
+    assert client.post("/api/investments/contributions", json={
+        "account_id": 9999, "amount_cents": 100, "date": "2026-09-01"}).status_code == 404
+    assert client.post("/api/investments/contributions", json={
+        "account_id": store["acct"], "amount_cents": 0, "date": "2026-09-01"}).status_code == 422
+
+
+def test_investment_withdrawals_are_stored_as_negative_cash_flows(client):
+    account_id = client.post("/api/accounts", json={
+        "name": "Brokerage", "domain": "investing"}).json()["id"]
+    response = client.post("/api/investments/contributions", json={
+        "account_id": account_id, "amount_cents": -2500, "date": "2026-09-10"})
+    assert response.status_code == 200
+    assert client.get("/api/investments/contributions").json()["items"][0]["amount_cents"] == -2500
+
+
+def test_account_deletion_preserves_investment_cash_flows(client):
+    account_id = client.post("/api/accounts", json={
+        "name": "Brokerage", "domain": "investing"}).json()["id"]
+    client.post("/api/investments/contributions", json={
+        "account_id": account_id, "amount_cents": 5000, "date": "2026-09-10"})
+
+    assert client.delete(f"/api/accounts/{account_id}").status_code == 200
+    item = client.get("/api/investments/contributions").json()["items"][0]
+    assert item["amount_cents"] == 5000
+    assert item["account_id"] is None
+    assert item["account_name"] == "Unknown account"
+
+
 def test_holding_quantity_patch_and_zero_removes(store, client, monkeypatch):
     monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 20000)
     account_id = store["acct"]

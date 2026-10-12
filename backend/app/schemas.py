@@ -145,3 +145,16 @@ class HoldingCreate(BaseModel):
 class HoldingRead(HoldingCreate):
     id: int
     model_config = ConfigDict(from_attributes=True)
+
+
+class InvestmentContributionCreate(BaseModel):
+    account_id: int
+    amount_cents: int
+    date: dt.date
+    note: Optional[str] = None
+
+
+class InvestmentContributionRead(InvestmentContributionCreate):
+    id: int
+    account_id: Optional[int] = None
+    model_config = ConfigDict(from_attributes=True)

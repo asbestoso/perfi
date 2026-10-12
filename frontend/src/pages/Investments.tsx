@@ -117,6 +117,19 @@ const targetAllocations: Record<string, number> = {
   US: 55, Intl: 30, Alts: 1, Bonds: 14, Cash: 0,
 };
 
+function fmtDay(date: string) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function fmtDayYear(date: string) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function signedDollars(value: number) {
+  const rounded = Math.round(value * 100);
+  return `${rounded < 0 ? "" : "+"}${dollars(Math.abs(rounded))}`;
+}
+
 function PortfolioHistory({ tick, accounts, positions }: any) {
   const [historyAccount, setHistoryAccount] = useState("");
   const [historyCategory, setHistoryCategory] = useState("");
@@ -133,6 +146,13 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
   const points = Object.entries(byDate)
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([date, market_cents]) => ({ date, value: market_cents / 100 }));
+  const first = points[0];
+  const last = points[points.length - 1];
+  const prev = points.length > 1 ? points[points.length - 2] : null;
+  const totalChg = last && first ? last.value - first.value : 0;
+  const totalPct = first && first.value ? (totalChg / first.value) * 100 : 0;
+  const dayChg = last && prev ? last.value - prev.value : 0;
+  const tone = (n: number) => (n < 0 ? "text-red-700" : "text-pine-700");
   return (
     <Card title="Portfolio over time"
       hint={points.length < 2 ? "One data point is stored per day as prices refresh." : undefined}
@@ -157,23 +177,179 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
       {points.length === 0 ? (
         <Empty>History starts building the next time prices refresh.</Empty>
       ) : (
-        <div className="rounded-xl bg-slate-50/80 px-2 py-3">
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
-                minTickGap={32} tickFormatter={(date: string) => date.slice(5).replace("-", "/")} />
-              <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64}
-                tickFormatter={(value: number) => `$${(value / 1000).toFixed(1)}k`} />
-              <Tooltip formatter={(value: number) => dollars(Math.round(Number(value) * 100))}
-                labelFormatter={(date: string) => date} />
-              <Area type="monotone" dataKey="value" stroke="#166534" fill="#166534"
-                fillOpacity={0.12} strokeWidth={2} name="Market value" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+        <>
+          <div className="mb-3 flex flex-wrap items-end gap-x-8 gap-y-2">
+            <div>
+              <div className="text-sm text-slate-500">Current value</div>
+              <div className="text-3xl font-bold tracking-tight tabular-nums">
+                {dollars(Math.round(last.value * 100))}
+              </div>
+            </div>
+            {prev && (
+              <>
+                <div className="pb-0.5">
+                  <div className="text-sm text-slate-500">Since {fmtDay(first.date)}</div>
+                  <div className={`text-lg font-semibold tabular-nums ${tone(totalChg)}`}>
+                    {signedDollars(totalChg)} ({totalPct < 0 ? "" : "+"}{totalPct.toFixed(2)}%)
+                  </div>
+                </div>
+                <div className="pb-0.5">
+                  <div className="text-sm text-slate-500">Since {fmtDay(prev.date)}</div>
+                  <div className={`text-lg font-semibold tabular-nums ${tone(dayChg)}`}>
+                    {signedDollars(dayChg)}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <div className="rounded-xl bg-slate-50/80 px-2 py-3">
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
+                  minTickGap={32} tickFormatter={fmtDay} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64}
+                  domain={["auto", "auto"]}
+                  tickFormatter={(value: number) => `$${(value / 1000).toFixed(1)}k`} />
+                <Tooltip formatter={(value: number) => dollars(Math.round(Number(value) * 100))}
+                  labelFormatter={fmtDayYear} />
+                <Area type="monotone" dataKey="value" stroke="#166534" fill="#166534"
+                  fillOpacity={0.12} strokeWidth={2} name="Market value"
+                  dot={{ r: 3, strokeWidth: 2 }} activeDot={{ r: 5 }} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </>
       )}
     </Card>
+  );
+}
+
+function Contributions({ accounts, tick, onChange }: any) {
+  const data = useGet(`/api/investments/contributions?tick=${tick}`);
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [kind, setKind] = useState("deposit");
+  const [date, setDate] = useState(today());
+  const [note, setNote] = useState("");
+  const [message, setMessage] = useState("");
+  const items = data?.items || [];
+  const points = [...items].sort((a: any, b: any) => a.date.localeCompare(b.date))
+    .reduce((result: any[], item: any) => {
+      const previous = result[result.length - 1]?.total || 0;
+      const total = previous + Number(item.amount_cents || 0);
+      const existing = result.find((point) => point.date === item.date);
+      if (existing) existing.total = total;
+      else result.push({ date: item.date, total });
+      return result;
+    }, []);
+  const total = items.reduce((sum: number, item: any) => sum + Number(item.amount_cents || 0), 0);
+
+  async function submit(e: any) {
+    e.preventDefault();
+    const cents = Math.round(Number(amount) * 100);
+    if (!accountId) { setMessage("Account is required."); return; }
+    if (!Number.isFinite(cents) || cents <= 0) { setMessage("Amount must be greater than zero."); return; }
+    try {
+      await api("/api/investments/contributions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account_id: Number(accountId),
+          amount_cents: kind === "withdrawal" ? -cents : cents,
+          date,
+          note: note.trim() || null,
+        }),
+      });
+      setAmount(""); setNote(""); setKind("deposit"); setMessage(""); onChange();
+    } catch (e: any) { setMessage(`Failed: ${e.message}`); }
+  }
+
+  async function remove(id: number) {
+    if (!window.confirm("Delete this contribution?")) return;
+    try {
+      await api(`/api/investments/contributions/${id}`, { method: "DELETE" });
+      onChange();
+    } catch (e: any) { setMessage(`Failed: ${e.message}`); }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Stat label="Net contributions">{dollars(total)}</Stat>
+        <Stat label="Deposit / withdrawal records">{items.length}</Stat>
+      </div>
+      <Card title="Add deposit or withdrawal" hint="Deposits increase the account total; withdrawals decrease it.">
+        <form onSubmit={submit} className="flex flex-wrap items-end gap-4">
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Type
+            <select value={kind} onChange={(e) => setKind(e.target.value)} className={inputCls}>
+              <option value="deposit">Deposit</option>
+              <option value="withdrawal">Withdrawal</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Amount
+            <input value={amount} onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal" placeholder="500.00" className={`${inputCls} w-28`} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-600">Date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className={inputCls} required />
+          </label>
+          <label className="min-w-52 flex-1 flex flex-col gap-1 text-xs font-medium text-slate-600">Account
+            <select value={accountId} onChange={(e) => setAccountId(e.target.value)}
+              className={inputCls} required>
+              <option value="">Select account</option>
+              {(accounts?.items || []).filter((a: any) => ["investing", "mixed"].includes(a.domain))
+                .map((a: any) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+          <label className="min-w-52 flex-1 flex flex-col gap-1 text-xs font-medium text-slate-600">Note
+            <input value={note} onChange={(e) => setNote(e.target.value)}
+              placeholder="Monthly contribution" className={inputCls} />
+          </label>
+          <button className={btnCls}>Add contribution</button>
+          {message && <span className="basis-full text-sm text-slate-600">{message}</span>}
+        </form>
+      </Card>
+      <Card title="Net contributions over time" hint="Cumulative deposits minus withdrawals, by date.">
+        {points.length === 0 ? <Empty>No contributions recorded yet.</Empty> : (
+          <div className="rounded-xl bg-slate-50/80 px-2 py-3">
+            <ResponsiveContainer width="100%" height={260}>
+              <AreaChart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false}
+                  minTickGap={32} tickFormatter={fmtDay} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64}
+                  tickFormatter={(value: number) => dollars(value)} />
+                <Tooltip formatter={(value: number) => dollars(Number(value))}
+                  labelFormatter={fmtDayYear} />
+                <Area type="monotone" dataKey="total" stroke="#2563eb" fill="#2563eb"
+                  fillOpacity={0.12} strokeWidth={2} dot={{ r: 3 }} name="Contributed" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+      <Card title={`Contribution history (${items.length})`}>
+        {items.length === 0 ? <Empty>Your contribution history will appear here.</Empty> : (
+          <table className={tblCls}>
+            <thead><tr><th>Date</th><th>Account</th><th>Note</th><th className="text-right">Amount</th><th /></tr></thead>
+            <tbody>{items.map((item: any) => (
+              <tr key={item.id}>
+                <td>{fmtDayYear(item.date)}</td>
+                <td>{item.account_name}</td>
+                <td className="text-slate-500">{item.note || "—"}</td>
+                <td className={`text-right font-medium tabular-nums ${
+                  Number(item.amount_cents) < 0 ? "text-red-700" : "text-pine-700"
+                }`}>{dollars(item.amount_cents)}</td>
+                <td className="text-right"><button type="button" onClick={() => remove(item.id)}
+                  className="text-xs text-red-700 hover:underline">Delete</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </Card>
+    </div>
   );
 }
 
@@ -191,6 +367,7 @@ export default function Investments() {
   const [categoryBySymbol, setCategoryBySymbol] = useState<Record<string, string>>({});
   const [allocationSymbol, setAllocationSymbol] = useState("");
   const [allocationDraft, setAllocationDraft] = useState<Record<string, string>>({});
+  const [tab, setTab] = useState("portfolio");
   const bump = () => setTick((t) => t + 1);
   const { summary, refreshing } = useInvestmentSummary(tick);
   const accounts = useGet("/api/accounts?limit=500");
@@ -210,7 +387,7 @@ export default function Investments() {
   }), [summary, categoryBySymbol]);
   const positionsTable = useSortable("symbol", {
     symbol: (p: any) => p.symbol,
-    account_name: (p: any) => `${p.accounts?.length || 0}`,
+    account_name: (p: any) => String(p.account_name || "").toLowerCase(),
     shares: (p: any) => Number(p.quantity_milli || 0),
     price: (p: any) => Number(p.price_cents || 0),
     market: (p: any) => Number(p.market_cents || 0),
@@ -227,7 +404,7 @@ export default function Investments() {
         const kept = accountFilter
           ? (p.accounts || []).filter((a: any) => String(a.account_id) === accountFilter)
           : (p.accounts || []);
-        const accountName = accountFilter && kept.length
+        const accountName = kept.length === 1
           ? kept[0].name
           : `${kept.length || 0} account${kept.length === 1 ? "" : "s"}`;
         const single = kept.length === 1 ? kept[0] : null;
@@ -389,6 +566,16 @@ export default function Investments() {
 
   return (
     <Page title="Investments">
+      <div className="flex gap-1 border-b border-slate-200">
+        {[["portfolio", "Portfolio"], ["contributions", "Contributions"]].map(([value, label]) => (
+          <button key={value} type="button" onClick={() => setTab(value)}
+            className={`border-b-2 px-4 py-2 text-sm font-medium ${
+              tab === value ? "border-pine-700 text-pine-800" : "border-transparent text-slate-500 hover:text-slate-800"
+            }`}>{label}</button>
+        ))}
+      </div>
+      {tab === "contributions" && <Contributions accounts={accounts} tick={tick} onChange={bump} />}
+      {tab !== "portfolio" ? null : <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-1">
         <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
       </div>
@@ -630,6 +817,7 @@ export default function Investments() {
       <Card title="Add holding">
         <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
       </Card>
+      </>}
     </Page>
   );
 }

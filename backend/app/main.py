@@ -22,6 +22,8 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             status = response.status_code
+        except HTTPException:
+            raise  # logged with detail by the handler below
         except Exception:
             log.exception(f"{request.method} {request.url.path} -> 500")
             raise
@@ -45,8 +47,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"],
 app.include_router(router, prefix="/api")
 
 
+@app.exception_handler(HTTPException)
+async def _http_error(request, exc):
+    log.warning(f"{request.method} {request.url.path} -> {exc.status_code} {exc.detail!r}")
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 @app.exception_handler(Exception)
 async def _unhandled(request, exc):
-    if isinstance(exc, HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})

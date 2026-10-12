@@ -2,12 +2,14 @@
 import datetime as dt
 import math
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy import func, or_, select
 
 from ... import models, schemas
+from ...logging_setup import get as get_log
 from ..deps import get_db
 from ..pagination import pagination
 from ...services import analytics, reconcile
@@ -17,6 +19,7 @@ from ...services.market_data import QuoteUnavailableError, get_live_name, get_li
 from ...services.profiles import detect_source, header_signature, propose_mapping, unmapped_columns
 
 router = APIRouter()
+log = get_log("investments")
 
 ACCOUNT_DOMAINS = ("spending", "investing", "mixed")
 TRANSACTION_KINDS = ("expense", "income", "investment_contribution",
@@ -142,8 +145,8 @@ def delete_account(id, db=Depends(get_db)):
         synchronize_session=False)
     db.query(models.Holding).filter_by(account_id=account.id).delete(
         synchronize_session=False)
-    db.query(models.PortfolioSnapshot).filter_by(account_id=account.id).delete(
-        synchronize_session=False)
+    db.query(models.InvestmentContribution).filter_by(account_id=account.id).update(
+        {"account_id": None}, synchronize_session=False)
     db.query(models.StagingRow).filter_by(account_id=account.id).update(
         {"account_id": None}, synchronize_session=False)
     db.query(models.ImportAccountMapping).filter_by(account_id=account.id).delete(
@@ -670,6 +673,44 @@ def investments(db=Depends(get_db)):
             "total_cents": analytics.portfolio_value(db)}
 
 
+@router.get("/investments/contributions")
+def list_investment_contributions(db=Depends(get_db)):
+    contributions = db.scalars(select(models.InvestmentContribution).order_by(
+        models.InvestmentContribution.date.desc(),
+        models.InvestmentContribution.id.desc())).all()
+    return {"items": [
+        {"id": item.id, "account_id": item.account_id,
+         "account_name": item.account.name if item.account else "Unknown account",
+         "amount_cents": item.amount_cents, "date": item.date.isoformat(),
+         "note": item.note}
+        for item in contributions
+    ]}
+
+
+@router.post("/investments/contributions", response_model=schemas.InvestmentContributionRead)
+def create_investment_contribution(payload: schemas.InvestmentContributionCreate,
+                                   db=Depends(get_db)):
+    account = _get_or_404(db, models.Account, payload.account_id)
+    if account.domain not in ("investing", "mixed"):
+        raise HTTPException(status_code=422,
+                            detail="Contributions must use an investing account")
+    if payload.amount_cents == 0:
+        raise HTTPException(status_code=422, detail="amount_cents cannot be zero")
+    contribution = models.InvestmentContribution(**payload.model_dump())
+    db.add(contribution)
+    db.commit()
+    db.refresh(contribution)
+    return contribution
+
+
+@router.delete("/investments/contributions/{id}")
+def delete_investment_contribution(id, db=Depends(get_db)):
+    contribution = _get_or_404(db, models.InvestmentContribution, _as_int(id, "id"))
+    db.delete(contribution)
+    db.commit()
+    return {"ok": True}
+
+
 @router.get("/investments/name/{symbol}")
 def investment_name(symbol: str, db=Depends(get_db)):
     normalized = symbol.strip().upper()
@@ -810,6 +851,7 @@ def update_investment_allocation(symbol: str, payload: dict, db=Depends(get_db))
 
 @router.get("/investments/summary")
 def investments_summary(db=Depends(get_db)):
+    started = time.perf_counter()
     symbols = []
     for holding in db.scalars(select(models.Holding)).all():
         if holding.symbol.upper() not in symbols:
@@ -841,6 +883,7 @@ def investments_summary(db=Depends(get_db)):
     result = analytics.portfolio_summary(db)
     today = dt.date.today()
     live = {}
+    added = 0
     for holding in db.scalars(select(models.Holding)).all():
         key = (holding.account_id, holding.symbol.upper())
         live[key] = holding
@@ -850,6 +893,7 @@ def investments_summary(db=Depends(get_db)):
             models.PortfolioSnapshot.symbol == holding.symbol.upper()))
         market = (holding.quantity_milli * holding.price_cents) // 1000
         if snapshot is None:
+            added += 1
             db.add(models.PortfolioSnapshot(
                 date=today, account_id=holding.account_id,
                 symbol=holding.symbol.upper(),
@@ -859,11 +903,18 @@ def investments_summary(db=Depends(get_db)):
             snapshot.quantity_milli = holding.quantity_milli
             snapshot.price_cents = holding.price_cents
             snapshot.market_cents = market
+    pruned = 0
     for stale in db.scalars(select(models.PortfolioSnapshot).where(
             models.PortfolioSnapshot.date == today)).all():
         if (stale.account_id, stale.symbol) not in live:
+            pruned += 1
             db.delete(stale)
     db.commit()
+    priced = sum(1 for price in prices.values() if price is not None)
+    ms = (time.perf_counter() - started) * 1000
+    log.info(f"summary refresh: {len(symbols)} symbols, {priced} priced, "
+             f"{len(symbols) - priced} failed, {added} snapshots added, "
+             f"{pruned} pruned ({ms:.0f}ms)")
     return result
 
 

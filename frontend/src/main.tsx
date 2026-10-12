@@ -11,7 +11,18 @@ import Settings from "./pages/Settings";
 
 export async function api(path: string, opts?: RequestInit) {
   const r = await fetch(path, opts);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) {
+    let suffix = "";
+    try {
+      const d = (await r.json())?.detail;
+      if (typeof d === "string" && d) suffix = ` — ${d}`;
+      else if (d?.message) suffix = ` — ${d.message}`;
+      else if (d != null) suffix = ` — ${JSON.stringify(d)}`;
+    } catch {
+      suffix = "";
+    }
+    throw new Error(`${path}: ${r.status}${suffix}`);
+  }
   return r.json();
 }
 

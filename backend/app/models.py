@@ -100,6 +100,16 @@ class PortfolioSnapshot(Base):
     )
 
 
+class InvestmentContribution(Base):
+    __tablename__ = "investment_contributions"
+    id = Column(Integer, primary_key=True, nullable=False)
+    account_id = Column(ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    amount_cents = Column(Integer, nullable=False)
+    date = Column(Date, nullable=False)
+    note = Column(Text, nullable=True)
+    account = relationship("Account")
+
+
 class ImportBatch(Base):
     """One uploaded file: profile used, per-row outcomes in staging_rows.
 

@@ -327,6 +327,9 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
     batch.staged = len(active_rows)
     batch.skipped = len(rows) - len(active_rows)
     db.commit()
+    log.info(f"holdings batch {batch.id} ({filename or '-'}): "
+             f"staged={len(active_rows)} updated={changed} "
+             f"skipped={len(rows) - len(active_rows)} accounts={sorted(labels)}")
     return {"batch_id": batch.id, "staged": len(active_rows), "updated": changed,
             "skipped": len(rows) - len(active_rows), "accounts": sorted(labels),
             "file_kind": "brokerage", "by_kind": {"holding": len(active_rows)}}
