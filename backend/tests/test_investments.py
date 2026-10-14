@@ -271,6 +271,48 @@ def test_quote_cache_serves_repeat_summaries(client, monkeypatch):
     market_data.clear_quote_cache()
 
 
+def test_cash_symbol_priced_at_one_dollar_and_allows_negative(client, monkeypatch):
+    from app.services import market_data
+
+    def _explode(request, timeout=8):
+        raise AssertionError("CASH must not hit the network")
+
+    monkeypatch.setattr("app.services.market_data.urllib.request.urlopen", _explode)
+    assert market_data.get_live_price("cash") == 100
+    assert market_data.get_live_name("cash") == "Cash"
+
+    cash = client.post("/api/investments", json={
+        "symbol": "CASH", "quantity_milli": -5000}).json()
+    assert (cash["price_cents"], cash["name"]) == (100, "Cash")
+
+    position = client.get("/api/investments/summary").json()["positions"][0]
+    assert position["symbol"] == "CASH"
+    assert position["price_cents"] == 100
+    assert position["market_cents"] == -500
+    assert position["category"] == "Cash"
+    point = client.get("/api/investments/history").json()["points"][0]
+    assert (point["symbol"], point["market_cents"]) == ("CASH", -500)
+
+    assert client.patch("/api/investments/classification/CASH",
+                        json={"category": "Alts"}).status_code == 200
+    position = client.get("/api/investments/summary").json()["positions"][0]
+    assert position["category"] == "Alts"
+    assert client.patch("/api/investments/classification/CASH",
+                        json={"category": None}).status_code == 200
+    position = client.get("/api/investments/summary").json()["positions"][0]
+    assert position["category"] == "Cash"
+
+    assert client.patch(f"/api/investments/{cash['id']}",
+                        json={"quantity_milli": -8000}).status_code == 200
+
+    monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 25000)
+    monkeypatch.setattr("app.api.routes.api.get_live_name", lambda symbol: "VTI Fund")
+    vti = client.post("/api/investments", json={
+        "symbol": "VTI", "quantity_milli": 10000}).json()
+    r = client.patch(f"/api/investments/{vti['id']}", json={"quantity_milli": -1})
+    assert r.status_code == 422
+
+
 def test_summary_prunes_sold_holdings_from_today(client, monkeypatch):
     monkeypatch.setattr("app.api.routes.api.get_live_price", lambda symbol: 10000)
     vti = client.post("/api/investments", json={

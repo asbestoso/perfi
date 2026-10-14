@@ -775,7 +775,7 @@ def update_holding(id, payload: dict, db=Depends(get_db)):
         quantity = int(payload["quantity_milli"])
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="quantity_milli must be an integer")
-    if quantity < 0:
+    if quantity < 0 and (holding.symbol or "").upper() != "CASH":
         raise HTTPException(status_code=422, detail="quantity_milli cannot be negative")
     if quantity == 0:
         db.delete(holding)

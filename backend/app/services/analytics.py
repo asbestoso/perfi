@@ -32,7 +32,8 @@ def portfolio_summary(db):
     for holding in db.scalars(select(Holding)).all():
         sym = holding.symbol.upper()
         position = holdings.setdefault(sym, {"name": holding.name, "quantity_milli": 0, "market_cents": 0,
-                                             "category": classifications.get(sym),
+                                             "category": classifications.get(sym) or (
+                                                 "Cash" if sym == "CASH" else None),
                                              "allocations": allocations.get(sym, {}),
                                              "accounts": {}})
         if not position["name"] and holding.name:

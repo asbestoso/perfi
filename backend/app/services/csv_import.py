@@ -276,7 +276,7 @@ def import_holdings(db, account_id, reader, filename, mapping=None):
             quantity = round(float(quantity_raw.replace(",", "")) * 1000)
         except ValueError:
             raise HTTPException(status_code=422, detail=f"invalid quantity for {symbol}")
-        if quantity < 0:
+        if quantity < 0 and symbol != "CASH":
             raise HTTPException(status_code=422, detail=f"negative quantity for {symbol}")
         aid = resolved[label]
         key = (aid, symbol)

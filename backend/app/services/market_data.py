@@ -30,6 +30,8 @@ def get_live_name(symbol):
     symbol = (symbol or "").strip().upper()
     if not symbol:
         raise QuoteUnavailableError("symbol is required")
+    if symbol == "CASH":
+        return "Cash"
     yahoo = yahoo_symbol(symbol)
     encoded = urllib.parse.quote(yahoo, safe="")
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{encoded}?range=1d&interval=1m"
@@ -53,6 +55,9 @@ def get_live_price(symbol):
     symbol = (symbol or "").strip().upper()
     if not symbol:
         raise QuoteUnavailableError("symbol is required")
+    if symbol == "CASH":
+        log.debug("quote CASH pinned at 100c (no lookup)")
+        return 100
     now = time.monotonic()
     with _lock:
         hit = _quotes.get(symbol)

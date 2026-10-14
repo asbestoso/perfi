@@ -6,6 +6,7 @@ import urllib.parse
 
 import pytest
 
+from app import logging_setup
 from app.services import market_data
 
 
@@ -79,6 +80,20 @@ def test_holding_import_422_logs_detail(store, client, caplog):
     assert r.json() == {"detail": "duplicate holding row for Brokerage Alpha / VTI"}
     assert any("duplicate holding row for Brokerage Alpha / VTI" in rec.getMessage()
                for rec in caplog.records if rec.name == "perfi.http")
+
+
+def test_setup_evicts_foreign_root_handlers_but_keeps_ours():
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    foreign = logging.StreamHandler()
+    try:
+        root.addHandler(foreign)
+        logging_setup.setup()
+        assert foreign not in root.handlers
+        assert any(getattr(handler, "_perfi_owned", False)
+                   for handler in root.handlers)
+    finally:
+        root.handlers[:] = saved
 
 
 def test_request_and_domain_logs(store, client, caplog):
