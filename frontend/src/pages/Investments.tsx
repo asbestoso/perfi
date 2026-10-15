@@ -437,14 +437,14 @@ export default function Investments() {
     if (editingHolding !== account.holding_id) {
       return (
         <button type="button" title="Edit shares (0 removes)"
-          onClick={() => startHoldingEdit(account)}
+          onClick={(e) => { e.stopPropagation(); startHoldingEdit(account); }}
           className="shrink-0 tabular-nums text-slate-600 hover:text-pine-700 hover:underline">
           {shares(account.quantity_milli)}{compact ? "" : " shares"}
         </button>
       );
     }
     return (
-      <span className="flex items-center justify-end gap-1">
+      <span className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
         <input value={editQty}
           onChange={(e) => setEditQty(e.target.value)}
           onKeyDown={(e) => {
@@ -724,7 +724,7 @@ export default function Investments() {
                     )}
                   </td>
                   <td className="text-right tabular-nums">
-                    {p.accounts?.length === 1 ? holdingQtyEditor(p.accounts[0], true) : shares(p.quantity_milli)}
+                    {p.accounts?.length === 1 && !expanded ? holdingQtyEditor(p.accounts[0], true) : shares(p.quantity_milli)}
                   </td>
                   <td className="text-right tabular-nums">{dollars(p.price_cents)}</td>
                   <td className="text-right tabular-nums">{dollars(p.market_cents)}</td>
