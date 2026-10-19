@@ -368,6 +368,7 @@ export default function Investments() {
   const [allocationSymbol, setAllocationSymbol] = useState("");
   const [allocationDraft, setAllocationDraft] = useState<Record<string, string>>({});
   const [tab, setTab] = useState("portfolio");
+  const [allocationView, setAllocationView] = useState("all");
   const bump = () => setTick((t) => t + 1);
   const { summary, refreshing } = useInvestmentSummary(tick);
   const accounts = useGet("/api/accounts?limit=500");
@@ -433,7 +434,7 @@ export default function Investments() {
     setEditMsg("");
   }
 
-  function holdingQtyEditor(account: any, compact = false) {
+  function holdingQtyEditor(account: any, compact = false, symbol = "") {
     if (editingHolding !== account.holding_id) {
       return (
         <button type="button" title="Edit shares (0 removes)"
@@ -448,21 +449,25 @@ export default function Investments() {
         <input value={editQty}
           onChange={(e) => setEditQty(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") saveHoldingQty(account.holding_id);
+            if (e.key === "Enter") saveHoldingQty(account.holding_id, symbol);
             if (e.key === "Escape") cancelHoldingEdit();
           }}
           onBlur={cancelHoldingEdit}
           inputMode="decimal" placeholder="shares"
           className={`${inputCls} w-24 py-1`} autoFocus />
         <button type="button" onMouseDown={(e) => e.preventDefault()}
-          onClick={() => saveHoldingQty(account.holding_id)}
+          onClick={() => saveHoldingQty(account.holding_id, symbol)}
           className={btnCls}>Save</button>
       </span>
     );
   }
 
-  async function saveHoldingQty(holdingId: number) {    const qty = Number(editQty);
-    if (!Number.isFinite(qty) || qty < 0) { setEditMsg("Shares must be 0 or more."); return; }
+  async function saveHoldingQty(holdingId: number, symbol = "") {
+    const qty = Number(editQty);
+    if (!Number.isFinite(qty) || (qty < 0 && symbol !== "CASH")) {
+      setEditMsg(symbol === "CASH" ? "Shares must be a number." : "Shares must be 0 or more.");
+      return;
+    }
     if (qty === 0 && !window.confirm("Remove this holding from the account?")) return;
     try {
       await api(`/api/investments/${holdingId}`, {
@@ -542,22 +547,30 @@ export default function Investments() {
       .map(([name, value]) => ({ name, value }));
   }, [positions]);
 
+  const investedOnly = allocationView === "invested";
+  const visibleBreakdown = investedOnly
+    ? categoryBreakdown.filter((entry) => entry.name !== "Cash" && entry.name !== "Uncategorized")
+    : categoryBreakdown;
+  const visibleCategories = investedOnly
+    ? categories.filter((category) => category !== "Cash")
+    : [...categories, "Uncategorized"];
+
   const categoryComparison = useMemo(() => {
-    const total = categoryBreakdown.reduce((sum, entry) => sum + entry.value, 0);
-    const actual = Object.fromEntries(categoryBreakdown.map((entry) => [
+    const total = visibleBreakdown.reduce((sum, entry) => sum + entry.value, 0);
+    const actual = Object.fromEntries(visibleBreakdown.map((entry) => [
       entry.name, {
         percent: total ? (entry.value / total) * 100 : 0,
         value: entry.value,
       },
     ]));
-    return [...categories, "Uncategorized"].map((category) => ({
+    return visibleCategories.map((category) => ({
       category,
       actual: actual[category]?.percent || 0,
       actualValue: actual[category]?.value || 0,
       target: targetAllocations[category] || 0,
       targetValue: total * (targetAllocations[category] || 0) / 100,
     }));
-  }, [categoryBreakdown]);
+  }, [categoryBreakdown, allocationView]);
 
   const tableTotals = rows.reduce((totals: { shares: number; market: number }, position: any) => ({
     shares: totals.shares + Number(position.quantity_milli || 0),
@@ -580,19 +593,33 @@ export default function Investments() {
         <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
       </div>
       <Card title="Allocation by category"
-        hint="Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts.">
+        hint={investedOnly
+          ? "Invested assets only — Cash and Uncategorized are excluded."
+          : "Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts."}
+        action={
+          <div className="flex rounded-lg border border-slate-200 p-0.5 text-sm">
+            {[["all", "All"], ["invested", "Invested"]].map(([value, label]) => (
+              <button key={value} type="button" aria-pressed={allocationView === value}
+                onClick={() => setAllocationView(value)}
+                className={`rounded-md px-3 py-1 font-medium ${
+                  allocationView === value ? "bg-pine-800 text-white" : "text-slate-500 hover:text-slate-800"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        }>
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(22rem,1fr)]">
-          {categoryBreakdown.length === 0 ? (
+          {visibleBreakdown.length === 0 ? (
             <Empty>No categorized holdings to chart yet.</Empty>
           ) : (
             <div className="rounded-xl bg-slate-50/80 px-2 py-3">
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
-                  <Pie data={categoryBreakdown} dataKey="value" nameKey="name"
+                  <Pie data={visibleBreakdown} dataKey="value" nameKey="name"
                     cx="50%" cy="48%" outerRadius={100} innerRadius={54}
                     paddingAngle={2} label={({ name, percent }) =>
                       `${name} ${(percent * 100).toFixed(0)}%`}>
-                    {categoryBreakdown.map((entry, index) => (
+                    {visibleBreakdown.map((entry, index) => (
                       <Cell key={entry.name} fill={categoryColors[index % categoryColors.length]} />
                     ))}
                   </Pie>
@@ -605,13 +632,18 @@ export default function Investments() {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-3">
               <h3 className="text-sm font-semibold text-slate-800">Portfolio mix</h3>
-              <p className="text-xs text-slate-500">Actual allocation versus target</p>
+              <p className="text-xs text-slate-500">{investedOnly ? "Actual allocation of invested assets" : "Actual allocation versus target"}</p>
             </div>
-            <div className="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem] gap-x-4 border-b border-slate-200 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-              <span>Category</span><span className="text-right">Actual</span><span className="text-right">Target</span><span className="text-right">Delta</span>
+            <div className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]"} gap-x-4 border-b border-slate-200 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400`}>
+              <span>Category</span><span className="text-right">Actual</span>
+              {investedOnly ? <span className="text-right">Value</span> : (
+                <>
+                  <span className="text-right">Target</span><span className="text-right">Delta</span>
+                </>
+              )}
             </div>
             {categoryComparison.map(({ category, actual, actualValue, target, targetValue }) => (
-              <div key={category} className="grid grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem] items-center gap-x-4 border-b border-slate-100 py-3 text-sm last:border-0">
+              <div key={category} className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]"} items-center gap-x-4 border-b border-slate-100 py-3 text-sm last:border-0`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 shrink-0 rounded-full"
@@ -624,15 +656,25 @@ export default function Investments() {
                 </div>
                 <span className="text-right">
                   <span className="block font-medium tabular-nums">{actual.toFixed(1)}%</span>
-                  <span className={`block text-xs tabular-nums font-semibold ${actual - target >= 0 ? "text-pine-700" : "text-red-600"}`}>{thousands(actualValue)}</span>
+                  {investedOnly ? null : (
+                    <span className={`block text-xs tabular-nums font-semibold ${actual - target >= 0 ? "text-pine-700" : "text-red-600"}`}>{thousands(actualValue)}</span>
+                  )}
                 </span>
-                <span className="text-right">
-                  <span className="block tabular-nums text-slate-500">{target.toFixed(0)}%</span>
-                  <span className="block text-xs tabular-nums text-slate-400">{thousands(targetValue)}</span>
-                </span>
-                <span className={`text-right text-xs font-semibold tabular-nums ${actualValue - targetValue >= 0 ? "text-pine-700" : "text-red-600"}`}>
-                  {actualValue - targetValue >= 0 ? "+" : "−"}{thousands(Math.abs(actualValue - targetValue))}
-                </span>
+                {investedOnly ? (
+                  <span className="text-right">
+                    <span className="block tabular-nums text-slate-500">{dollars(actualValue)}</span>
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-right">
+                      <span className="block tabular-nums text-slate-500">{target.toFixed(0)}%</span>
+                      <span className="block text-xs tabular-nums text-slate-400">{thousands(targetValue)}</span>
+                    </span>
+                    <span className={`text-right text-xs font-semibold tabular-nums ${actualValue - targetValue >= 0 ? "text-pine-700" : "text-red-600"}`}>
+                      {actualValue - targetValue >= 0 ? "+" : "−"}{thousands(Math.abs(actualValue - targetValue))}
+                    </span>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -724,7 +766,7 @@ export default function Investments() {
                     )}
                   </td>
                   <td className="text-right tabular-nums">
-                    {p.accounts?.length === 1 && !expanded ? holdingQtyEditor(p.accounts[0], true) : shares(p.quantity_milli)}
+                    {p.accounts?.length === 1 && !expanded ? holdingQtyEditor(p.accounts[0], true, p.symbol) : shares(p.quantity_milli)}
                   </td>
                   <td className="text-right tabular-nums">{dollars(p.price_cents)}</td>
                   <td className="text-right tabular-nums">{dollars(p.market_cents)}</td>
@@ -757,7 +799,7 @@ export default function Investments() {
                             <div key={account.account_id ?? "unassigned"}
                               className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
                               <span className="min-w-0 flex-1 truncate">{account.name}</span>
-                              {holdingQtyEditor(account)}
+                              {holdingQtyEditor(account, false, p.symbol)}
                             </div>
                           ))}
                         </div>
