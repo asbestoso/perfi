@@ -134,10 +134,38 @@ function signedDollars(value: number) {
   return `${rounded < 0 ? "−" : "+"}${wholeDollars(Math.abs(rounded))}`;
 }
 
-function PortfolioHistory({ rev, accounts, positions }: any) {
+/* Day-over-day price move for one table row: yesterday's quantity times the
+   price change, so buys, sells, and account transfers don't read as gains.
+   Prices are symbol-level averages — a holding that moved accounts would
+   otherwise book a phantom -100% move. Gaps in the snapshot history render
+   as "—" since there is no pair of days to compare. */
+function dayDeltaKey(position: any) {
+  return position.accounts?.length === 1
+    ? `${position.accounts[0].account_id}|${position.symbol}`
+    : `ALL|${position.symbol}`;
+}
+function PositionDelta({ position, deltas }: any) {
+  const d = deltas[dayDeltaKey(position)];
+  if (!d || !d.complete) return <span className="text-slate-400">—</span>;
+  if (!d.move) return <span className="tabular-nums text-slate-500">+0.0%</span>;
+  const tip = d.flow !== 0
+    ? `Net flows ${signedDollars(d.flow / 100)} · Market move ${signedDollars(d.move / 100)}`
+    : `Market move ${signedDollars(d.move / 100)}`;
+  return (
+    <span className="group relative">
+      <span className={`tabular-nums font-semibold ${d.move < 0 ? "text-red-700" : "text-pine-700"}`}>
+        {d.pct < 0 ? "" : "+"}{d.pct.toFixed(1)}%
+      </span>
+      <span className="pointer-events-none invisible absolute right-0 top-full z-10 mt-1 whitespace-nowrap rounded-lg border border-slate-200 bg-white p-2 text-xs font-normal text-slate-700 shadow-lg group-hover:visible">
+        {tip}
+      </span>
+    </span>
+  );
+}
+
+function PortfolioHistory({ history, accounts, positions }: any) {
   const [historyAccount, setHistoryAccount] = useState("");
   const [historyCategory, setHistoryCategory] = useState("");
-  const history = useGet(`/api/investments/history?rev=${rev}`);
   const raw = history?.points || [];
   const symbolInfo = Object.fromEntries(
     (positions || []).map((p: any) => [p.symbol.toUpperCase(), {
@@ -390,6 +418,8 @@ export default function Investments() {
   const [allocationView, setAllocationView] = useState("all");
   const bump = () => setTick((t) => t + 1);
   const { summary, refreshing, rev } = useInvestmentSummary(tick);
+  // Single history fetch shared by the chart and the row deltas below.
+  const historyData = useGet(`/api/investments/history?rev=${rev}`);
   const accounts = useGet("/api/accounts?limit=500");
   const holdings = useGet("/api/investments");
   const positions = useMemo(() => (summary?.positions || []).map((position: any) => {
@@ -412,7 +442,52 @@ export default function Investments() {
     price: (p: any) => Number(p.price_cents || 0),
     market: (p: any) => Number(p.market_cents || 0),
     category: (p: any) => String(p.category || "").toLowerCase(),
+    delta: (p: any) => dayDeltas[dayDeltaKey(p)]?.pct ?? 0,
   });
+  // Trade-adjusted day move per row key ("<account_id>|<SYM>", plus an
+  // "ALL|<SYM>" rollup): yesterday's quantity times the price change, so
+  // buys, sells, and account transfers don't read as performance. Prices
+  // are symbol-level averages — a holding that moved accounts would
+  // otherwise book a phantom -100% move on the way out.
+  const dayDeltas = useMemo(() => {
+    const pts = historyData?.points || [];
+    const dates = [...new Set(pts.map((p: any) => p.date))].sort();
+    if (dates.length < 2) return {};
+    const [d0, d1] = dates.slice(-2);
+    const acc: Record<string, { q0: number; m0: number; q1: number; m1: number }> = {};
+    const sym: Record<string, { q0: number; m0: number; q1: number; m1: number }> = {};
+    const slot = (store: Record<string, { q0: number; m0: number; q1: number; m1: number; has0: boolean; has1: boolean }>, key: string) =>
+      store[key] = store[key] || { q0: 0, m0: 0, q1: 0, m1: 0, has0: false, has1: false };
+    pts.forEach((p: any) => {
+      if (p.date !== d0 && p.date !== d1) return;
+      const symbol = String(p.symbol || "").toUpperCase();
+      const qty = Number(p.quantity_milli || 0);
+      const market = Number(p.market_cents || 0);
+      const a = slot(acc, `${p.account_id}|${symbol}`);
+      const s = slot(sym, symbol);
+      if (p.date === d0) { a.q0 += qty; a.m0 += market; a.has0 = true; s.q0 += qty; s.m0 += market; s.has0 = true; }
+      else { a.q1 += qty; a.m1 += market; a.has1 = true; s.q1 += qty; s.m1 += market; s.has1 = true; }
+    });
+    const out: Record<string, { move: number; flow: number; pct: number; complete: boolean }> = {};
+    Object.entries(acc).forEach(([key, t]) => {
+      const s = sym[key.split("|")[1]];
+      const p0 = s.q0 ? s.m0 / s.q0 : 0;
+      const p1 = s.q1 ? s.m1 / s.q1 : 0;
+      const move = (t.q0 > 0 && t.q1 > 0) ? Math.round(t.q0 * (p1 - p0)) : 0;
+      out[key] = { move, flow: (t.m1 - t.m0) - move, pct: t.m0 > 0 ? (move / t.m0) * 100 : 0, complete: t.has0 && t.has1 };
+    });
+    Object.entries(sym).forEach(([symbol, t]) => {
+      const p0 = t.q0 ? t.m0 / t.q0 : 0;
+      const p1 = t.q1 ? t.m1 / t.q1 : 0;
+      const move = (t.q0 > 0 && t.q1 > 0) ? Math.round(t.q0 * (p1 - p0)) : 0;
+      out[`ALL|${symbol}`] = {
+        move, flow: (t.m1 - t.m0) - move,
+        pct: t.m0 > 0 ? (move / t.m0) * 100 : 0,
+        complete: t.has0 && t.has1,
+      };
+    });
+    return out;
+  }, [historyData]);
   const rows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
     const filtered = positions
@@ -609,7 +684,7 @@ export default function Investments() {
       </div>
       {tab === "contributions" && <Contributions accounts={accounts} tick={tick} onChange={bump} />}
       {tab !== "portfolio" ? null : <>
-      <PortfolioHistory rev={rev} accounts={accounts} positions={positions} />
+      <PortfolioHistory history={historyData} accounts={accounts} positions={positions} />
       <Card title="Allocation by category"
         hint={investedOnly
           ? "Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts."
@@ -727,24 +802,15 @@ export default function Investments() {
                 {[
                   ["symbol", "Symbol", ""],
                   ["account_name", "Account", ""],
+                  ["market", "Market value", "text-right"],
+                  ["delta", "Delta", "text-right"],
                   ["shares", "Shares", "text-right"],
                   ["price", "Price/share", "text-right"],
-                  ["market", "Market value", "text-right"],
                   ["category", "Category", "text-right"],
                 ].map(([key, label, align]) => (
                   <th key={key} onClick={() => positionsTable.sortBy(key)}
                     className={`cursor-pointer select-none hover:text-pine-700 ${align}`}>
                     <span className="block">{label}{positionsTable.arrow(key)}</span>
-                    {key === "shares" && (
-                      <span className="mt-1 block text-xs font-normal text-slate-400">
-                        {shares(tableTotals.shares)}
-                      </span>
-                    )}
-                    {key === "market" && (
-                      <span className="mt-1 block text-xs font-normal text-slate-400">
-                        {wholeDollars(tableTotals.market)}
-                      </span>
-                    )}
                   </th>
                 ))}
               </tr>
@@ -759,10 +825,13 @@ export default function Investments() {
                   expandedSymbol === p.symbol ? "" : p.symbol
                 )} className={expandable ? "cursor-pointer hover:bg-slate-50" : undefined}>
                   <td className="font-medium">
-                    <span
-                      title={p.name || holdingNames[p.symbol] || p.symbol}
+                    <span className="group relative"
                       onMouseEnter={() => loadHoldingName(p.symbol, p.name)}
-                    >{p.symbol}</span>
+                    >{p.symbol}
+                      <span className="pointer-events-none invisible absolute left-0 top-full z-10 mt-1 min-w-32 rounded-lg border border-slate-200 bg-white p-2 text-xs font-normal text-slate-700 shadow-lg group-hover:visible">
+                        {p.name || holdingNames[p.symbol] || p.symbol}
+                      </span>
+                    </span>
                   </td>
                   <td>
                     {expandable ? (
@@ -783,11 +852,14 @@ export default function Investments() {
                       <span>{p.account_name}</span>
                     )}
                   </td>
+                  <td className="text-right tabular-nums">{wholeDollars(p.market_cents)}</td>
+                  <td className="text-right tabular-nums">
+                    <PositionDelta position={p} deltas={dayDeltas} />
+                  </td>
                   <td className="text-right tabular-nums">
                     {p.accounts?.length === 1 && !expanded ? holdingQtyEditor(p.accounts[0], true, p.symbol) : shares(p.quantity_milli)}
                   </td>
-                  <td className="text-right tabular-nums">{wholeDollars(p.price_cents)}</td>
-                  <td className="text-right tabular-nums">{wholeDollars(p.market_cents)}</td>
+                  <td className="text-right tabular-nums">{dollars(p.price_cents)}</td>
                   <td className="text-right">
                     <span onClick={(e) => e.stopPropagation()}>
                     <select value={p.category || ""}
@@ -807,7 +879,7 @@ export default function Investments() {
                 </tr>
                 {expanded && (
                   <tr key={`${p.symbol}-accounts`} className="bg-slate-50" onClick={(e) => e.stopPropagation()}>
-                    <td colSpan={6} className="px-4 py-3">
+                    <td colSpan={7} className="px-4 py-3">
                       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Holdings by account
                       </div>

@@ -53,6 +53,3 @@ which service died and why — that visibility is intentional, keep it.
 cd backend && ../.venv/bin/python -m pytest tests -q   # 66 tests
 cd frontend && npm run build                            # only frontend gate
 ```
-
-No tsc gate exists. Python stays hint-free (AGENTS.md) — Pydantic/FastAPI
-declarations are the only allowed annotations.
