@@ -119,7 +119,13 @@ export function dollars(cents: any) {
 }
 
 export function thousands(cents: any) {
-  return `$${(Number(cents || 0) / 100000).toFixed(1)}k`;
+  return `$${Math.round(Number(cents || 0) / 100000)}k`;
+}
+
+export function wholeDollars(cents: any) {
+  return (Math.round(Number(cents || 0) / 100)).toLocaleString(undefined, {
+    style: "currency", currency: "USD", maximumFractionDigits: 0,
+  });
 }
 
 export function today() {

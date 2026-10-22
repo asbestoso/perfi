@@ -1,7 +1,7 @@
 import React, { Fragment, useEffect, useMemo, useState } from "react";
 import { api } from "../main";
 import { Area, AreaChart, CartesianGrid, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, thousands, today, useGet, useSortable } from "./_shared";
+import { btnCls, Card, dollars, Empty, Error, inputCls, Page, Stat, tblCls, thousands, today, useGet, useSortable, wholeDollars } from "./_shared";
 
 function shares(milli: any) {
   return (Number(milli || 0) / 1000).toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -21,6 +21,9 @@ function useInvestmentSummary(tick: number) {
     }
   });
   const [refreshing, setRefreshing] = useState(false);
+  // Bumped after every successful summary refresh (mount, edits, hourly).
+  // History keys off this so the chart always loads after fresh snapshots.
+  const [rev, setRev] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -31,6 +34,7 @@ function useInvestmentSummary(tick: number) {
         if (!active) return;
         localStorage.setItem(summaryCacheKey, JSON.stringify(next));
         setSummary(next);
+        setRev((r) => r + 1);
       } catch (e: any) {
         if (active) setSummary((current: any) => current
           ? { ...current, error: String(e) }
@@ -47,7 +51,7 @@ function useInvestmentSummary(tick: number) {
     };
   }, [tick]);
 
-  return { summary, refreshing };
+  return { summary, refreshing, rev };
 }
 
 function AddHolding({ onDone, accounts, holdings }: any) {
@@ -127,21 +131,36 @@ function fmtDayYear(date: string) {
 
 function signedDollars(value: number) {
   const rounded = Math.round(value * 100);
-  return `${rounded < 0 ? "" : "+"}${dollars(Math.abs(rounded))}`;
+  return `${rounded < 0 ? "−" : "+"}${wholeDollars(Math.abs(rounded))}`;
 }
 
-function PortfolioHistory({ tick, accounts, positions }: any) {
+function PortfolioHistory({ rev, accounts, positions }: any) {
   const [historyAccount, setHistoryAccount] = useState("");
   const [historyCategory, setHistoryCategory] = useState("");
-  const history = useGet(`/api/investments/history?tick=${tick}`);
+  const history = useGet(`/api/investments/history?rev=${rev}`);
   const raw = history?.points || [];
-  const symbolCategory = Object.fromEntries(
-    (positions || []).map((p: any) => [p.symbol.toUpperCase(), p.category || "Uncategorized"]));
+  const symbolInfo = Object.fromEntries(
+    (positions || []).map((p: any) => [p.symbol.toUpperCase(), {
+      category: p.category || "Uncategorized",
+      allocations: p.allocations || {},
+    }]));
   const byDate: Record<string, number> = {};
   raw.forEach((point: any) => {
     if (historyAccount && String(point.account_id) !== historyAccount) return;
-    if (historyCategory && (symbolCategory[String(point.symbol).toUpperCase()] || "Uncategorized") !== historyCategory) return;
-    byDate[point.date] = (byDate[point.date] || 0) + Number(point.market_cents || 0);
+    const info = symbolInfo[String(point.symbol).toUpperCase()] || { category: "Uncategorized", allocations: {} };
+    let weight = 1;
+    if (historyCategory) {
+      const keys = Object.keys(info.allocations);
+      if (keys.length) {
+        // Mixed positions contribute their allocation slice instead of
+        // dropping out (or counting fully) under a category filter.
+        weight = Number(info.allocations[historyCategory] || 0) / 100;
+        if (!weight) return;
+      } else if (info.category !== historyCategory) {
+        return;
+      }
+    }
+    byDate[point.date] = (byDate[point.date] || 0) + Math.round(Number(point.market_cents || 0) * weight);
   });
   const points = Object.entries(byDate)
     .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -152,6 +171,7 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
   const totalChg = last && first ? last.value - first.value : 0;
   const totalPct = first && first.value ? (totalChg / first.value) * 100 : 0;
   const dayChg = last && prev ? last.value - prev.value : 0;
+  const dayPct = prev && prev.value ? (dayChg / prev.value) * 100 : 0;
   const tone = (n: number) => (n < 0 ? "text-red-700" : "text-pine-700");
   return (
     <Card title="Portfolio over time"
@@ -169,7 +189,6 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
             className={inputCls}>
             <option value="">All categories</option>
             {categories.map((category) => <option key={category}>{category}</option>)}
-            <option value="Mixed">Mixed</option>
             <option value="Uncategorized">Uncategorized</option>
           </select>
         </div>
@@ -182,7 +201,7 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
             <div>
               <div className="text-sm text-slate-500">Current value</div>
               <div className="text-3xl font-bold tracking-tight tabular-nums">
-                {dollars(Math.round(last.value * 100))}
+                {wholeDollars(Math.round(last.value * 100))}
               </div>
             </div>
             {prev && (
@@ -190,13 +209,13 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
                 <div className="pb-0.5">
                   <div className="text-sm text-slate-500">Since {fmtDay(first.date)}</div>
                   <div className={`text-lg font-semibold tabular-nums ${tone(totalChg)}`}>
-                    {signedDollars(totalChg)} ({totalPct < 0 ? "" : "+"}{totalPct.toFixed(2)}%)
+                    {signedDollars(totalChg)} ({totalPct < 0 ? "" : "+"}{totalPct.toFixed(1)}%)
                   </div>
                 </div>
                 <div className="pb-0.5">
                   <div className="text-sm text-slate-500">Since {fmtDay(prev.date)}</div>
                   <div className={`text-lg font-semibold tabular-nums ${tone(dayChg)}`}>
-                    {signedDollars(dayChg)}
+                    {signedDollars(dayChg)} ({dayPct < 0 ? "" : "+"}{dayPct.toFixed(1)}%)
                   </div>
                 </div>
               </>
@@ -210,8 +229,8 @@ function PortfolioHistory({ tick, accounts, positions }: any) {
                   minTickGap={32} tickFormatter={fmtDay} />
                 <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={64}
                   domain={["auto", "auto"]}
-                  tickFormatter={(value: number) => `$${(value / 1000).toFixed(1)}k`} />
-                <Tooltip formatter={(value: number) => dollars(Math.round(Number(value) * 100))}
+                  tickFormatter={(value: number) => `$${Math.round(value / 1000)}k`} />
+                <Tooltip formatter={(value: number) => wholeDollars(Math.round(Number(value) * 100))}
                   labelFormatter={fmtDayYear} />
                 <Area type="monotone" dataKey="value" stroke="#166534" fill="#166534"
                   fillOpacity={0.12} strokeWidth={2} name="Market value"
@@ -370,7 +389,7 @@ export default function Investments() {
   const [tab, setTab] = useState("portfolio");
   const [allocationView, setAllocationView] = useState("all");
   const bump = () => setTick((t) => t + 1);
-  const { summary, refreshing } = useInvestmentSummary(tick);
+  const { summary, refreshing, rev } = useInvestmentSummary(tick);
   const accounts = useGet("/api/accounts?limit=500");
   const holdings = useGet("/api/investments");
   const positions = useMemo(() => (summary?.positions || []).map((position: any) => {
@@ -544,6 +563,7 @@ export default function Investments() {
     });
     return Object.entries(totals)
       .filter(([, value]) => value > 0)
+      .filter(([name]) => name !== "Uncategorized")
       .map(([name, value]) => ({ name, value }));
   }, [positions]);
 
@@ -553,7 +573,7 @@ export default function Investments() {
     : categoryBreakdown;
   const visibleCategories = investedOnly
     ? categories.filter((category) => category !== "Cash")
-    : [...categories, "Uncategorized"];
+    : [...categories];
 
   const categoryComparison = useMemo(() => {
     const total = visibleBreakdown.reduce((sum, entry) => sum + entry.value, 0);
@@ -589,13 +609,11 @@ export default function Investments() {
       </div>
       {tab === "contributions" && <Contributions accounts={accounts} tick={tick} onChange={bump} />}
       {tab !== "portfolio" ? null : <>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-1">
-        <Stat label="Market value">{dollars(summary?.market_cents)}</Stat>
-      </div>
+      <PortfolioHistory rev={rev} accounts={accounts} positions={positions} />
       <Card title="Allocation by category"
         hint={investedOnly
-          ? "Invested assets only — Cash and Uncategorized are excluded."
-          : "Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts."}
+          ? "Actual allocation compared with your target: 55% US, 30% Intl, 14% Bonds, and 1% Alts."
+          : "Actual allocation across all categories, including Cash."}
         action={
           <div className="flex rounded-lg border border-slate-200 p-0.5 text-sm">
             {[["all", "All"], ["invested", "Invested"]].map(([value, label]) => (
@@ -623,7 +641,7 @@ export default function Investments() {
                       <Cell key={entry.name} fill={categoryColors[index % categoryColors.length]} />
                     ))}
                   </Pie>
-                  <Tooltip formatter={(value: number) => dollars(value)} />
+                  <Tooltip formatter={(value: number) => wholeDollars(value)} />
                   <Legend iconType="circle" />
                 </PieChart>
               </ResponsiveContainer>
@@ -632,18 +650,18 @@ export default function Investments() {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <div className="mb-3">
               <h3 className="text-sm font-semibold text-slate-800">Portfolio mix</h3>
-              <p className="text-xs text-slate-500">{investedOnly ? "Actual allocation of invested assets" : "Actual allocation versus target"}</p>
+              <p className="text-xs text-slate-500">{investedOnly ? "Actual allocation versus target" : "Actual allocation by category"}</p>
             </div>
-            <div className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]"} gap-x-4 border-b border-slate-200 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400`}>
+            <div className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]"} gap-x-4 border-b border-slate-200 pb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400`}>
               <span>Category</span><span className="text-right">Actual</span>
-              {investedOnly ? <span className="text-right">Value</span> : (
+              {investedOnly ? (
                 <>
                   <span className="text-right">Target</span><span className="text-right">Delta</span>
                 </>
-              )}
+              ) : <span className="text-right">Value</span>}
             </div>
             {categoryComparison.map(({ category, actual, actualValue, target, targetValue }) => (
-              <div key={category} className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]"} items-center gap-x-4 border-b border-slate-100 py-3 text-sm last:border-0`}>
+              <div key={category} className={`grid ${investedOnly ? "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem]" : "grid-cols-[minmax(0,1fr)_5.5rem_5.5rem]"} items-center gap-x-4 border-b border-slate-100 py-3 text-sm last:border-0`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="h-2 w-2 shrink-0 rounded-full"
@@ -656,15 +674,11 @@ export default function Investments() {
                 </div>
                 <span className="text-right">
                   <span className="block font-medium tabular-nums">{actual.toFixed(1)}%</span>
-                  {investedOnly ? null : (
+                  {investedOnly ? (
                     <span className={`block text-xs tabular-nums font-semibold ${actual - target >= 0 ? "text-pine-700" : "text-red-600"}`}>{thousands(actualValue)}</span>
-                  )}
+                  ) : null}
                 </span>
                 {investedOnly ? (
-                  <span className="text-right">
-                    <span className="block tabular-nums text-slate-500">{dollars(actualValue)}</span>
-                  </span>
-                ) : (
                   <>
                     <span className="text-right">
                       <span className="block tabular-nums text-slate-500">{target.toFixed(0)}%</span>
@@ -674,6 +688,10 @@ export default function Investments() {
                       {actualValue - targetValue >= 0 ? "+" : "−"}{thousands(Math.abs(actualValue - targetValue))}
                     </span>
                   </>
+                ) : (
+                  <span className="text-right">
+                    <span className="block tabular-nums text-slate-500">{wholeDollars(actualValue)}</span>
+                  </span>
                 )}
               </div>
             ))}
@@ -724,7 +742,7 @@ export default function Investments() {
                     )}
                     {key === "market" && (
                       <span className="mt-1 block text-xs font-normal text-slate-400">
-                        {dollars(tableTotals.market)}
+                        {wholeDollars(tableTotals.market)}
                       </span>
                     )}
                   </th>
@@ -768,8 +786,8 @@ export default function Investments() {
                   <td className="text-right tabular-nums">
                     {p.accounts?.length === 1 && !expanded ? holdingQtyEditor(p.accounts[0], true, p.symbol) : shares(p.quantity_milli)}
                   </td>
-                  <td className="text-right tabular-nums">{dollars(p.price_cents)}</td>
-                  <td className="text-right tabular-nums">{dollars(p.market_cents)}</td>
+                  <td className="text-right tabular-nums">{wholeDollars(p.price_cents)}</td>
+                  <td className="text-right tabular-nums">{wholeDollars(p.market_cents)}</td>
                   <td className="text-right">
                     <span onClick={(e) => e.stopPropagation()}>
                     <select value={p.category || ""}
@@ -855,7 +873,6 @@ export default function Investments() {
         )}
         {message && <p className="mt-3 text-sm text-red-700">{message}</p>}
       </Card>
-      <PortfolioHistory tick={tick} accounts={accounts} positions={positions} />
       <Card title="Add holding">
         <AddHolding onDone={bump} accounts={accounts} holdings={holdings} />
       </Card>
